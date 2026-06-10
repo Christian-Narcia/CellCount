@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ITCN Cell Counter</title>
+    <link rel="stylesheet" href="./css/styles.css" />
+    <!-- UTIF: TIFF decoding (8-bit & 16-bit). Loaded as a global for imageDecoder.js -->
+    <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>ITCN Cell Counter</h1>
+      <p class="subtitle">100% in-browser · nothing is uploaded</p>
+    </header>
+
+    <main class="app">
+      <!-- Left: control panel -->
+      <aside class="panel">
+        <section class="panel__section">
+          <h2 class="panel__heading">Channels</h2>
+          <div id="channel-inputs" class="channel-inputs"><!-- slots injected by channelInputs.js --></div>
+        </section>
+
+        <section id="controls" class="panel__section"><!-- sliders injected by controls.js --></section>
+
+        <section class="panel__section results">
+          <div class="results__count">
+            <span id="cell-count">0</span>
+            <span class="results__label">cells</span>
+          </div>
+          <div id="count-breakdown" class="results__breakdown"><!-- per-channel counts --></div>
+          <div class="results__actions">
+            <button id="view-btn" class="btn-secondary" disabled>View results</button>
+            <button id="export-btn" disabled>Export CSV</button>
+          </div>
+        </section>
+
+        <p id="status" class="status"></p>
+      </aside>
+
+      <!-- Right: image stage -->
+      <section id="stage" class="stage">
+        <div id="stage-placeholder" class="stage-placeholder">
+          <p>Load one or more channels to begin</p>
+          <p class="stage-placeholder__hint">Each channel is a separate file · .tif · .tiff · .png · .jpg</p>
+        </div>
+
+        <!-- Aligned canvas stack (bottom→top): composite · AOI boundary · markers -->
+        <div id="canvas-wrap" class="canvas-wrap">
+          <canvas id="base-canvas"></canvas>
+          <canvas id="aoi-canvas"></canvas>
+          <canvas id="overlay-canvas"></canvas>
+        </div>
+
+        <!-- Zoom controls (overlaid on the stage) -->
+        <div class="zoom-toolbar" id="zoom-toolbar" hidden>
+          <button id="zoom-out" title="Zoom out">&minus;</button>
+          <button id="zoom-pct" class="zoom-toolbar__pct" title="Reset to 100%">100%</button>
+          <button id="zoom-in" title="Zoom in">+</button>
+          <button id="zoom-fit" title="Fit to view">Fit</button>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
