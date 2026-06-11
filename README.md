@@ -136,10 +136,14 @@ pixel-level), **per-channel detection**, and **cross-channel co-localization**.
 The AOI is an **ImageJ `.roi` polygon**: a custom binary parser
 (`core/roiParser.js`) reads the format and `core/rasterize.js` fills it (scanline
 even-odd) into the binary mask the worker uses — done once on load. Detection runs
-the full LoG + NMS pipeline **independently on each channel** in a Web Worker, with
-the **AOI mask applied before detection**. A co-localization pass then matches
-cells across channels within a **Co-R** radius (every pair + the full set; Gray
-excluded by default). The overlay shows per-channel rings plus mixed-colour
+the full LoG + NMS pipeline **independently on each channel** in a Web Worker. The
+**AOI is a pure spatial restriction**: detection runs on the whole image and only
+cells whose centre falls inside the ROI are kept. This keeps the relative `log`
+threshold reference image-global, so a smaller ROI can only ever *reduce* the count
+(the in-ROI result is a strict subset of the whole-image result) — never raise it.
+A co-localization pass then matches cells across channels within a **Co-R** radius
+(every pair + the full set; **Gray is excluded by default** — set `coloc: true` on
+the Gray channel in `config.js` to include it). The overlay shows per-channel rings plus mixed-colour
 co-localization dots; the panel shows a total plus per-channel and per-combo
 counts. Display styling and Co-R never re-run detection — counts are stable. CSV
 exports one row per cell tagged with its channel.

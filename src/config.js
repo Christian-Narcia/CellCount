@@ -43,7 +43,7 @@ export const CHANNELS = Object.freeze([
   { key: 'b', label: 'Blue channel', component: 2, defaultColor: '#0000ff', coloc: true },
   // Gray is a reference/brightfield layer — detected + counted, but excluded from
   // co-localization combinations (set coloc:true if you want it to participate).
-  { key: 'gray', label: 'Gray channel', component: 'luma', defaultColor: '#ffffff', coloc: false },
+  { key: 'gray', label: 'Gray channel', component: 'luma', defaultColor: '#ffffff', coloc: true },
 ]);
 
 /**

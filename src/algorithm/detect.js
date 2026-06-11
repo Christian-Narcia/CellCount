@@ -34,22 +34,28 @@ import { nonMaxSuppression } from './nms.js';
  *   • brightfield → cells are dark → invert so they become bright peaks.
  * (This is intentionally the reverse of todo.txt Step A — see the project README.)
  *
- * AOI MASKING is applied HERE, before blurring: pixels outside the ROI are set
- * to the BACKGROUND level so the detector never fires there. In our bright-blob
- * convention the background is 0 (dark), so masked-out pixels → 0.
+ * AOI MASKING is a pure SPATIAL RESTRICTION: it controls WHERE cells are counted,
+ * never the image content the detector sees or the sensitivity bar it uses. So we
+ * run the full LoG pipeline on the WHOLE image and only at the end keep peaks
+ * whose centre lies inside the ROI.
  *
- *   NB: the todo says "set masked-out pixels to MaxIntensity". That is correct
- *   for the OPPOSITE (dark-valley) convention, where fluorescent images are
- *   inverted so cells become dark valleys and the background becomes bright —
- *   there you fill outside-ROI bright so it's never a valley. We use the reversed
- *   bright-blob convention (fluorescent = no inversion, cells are bright peaks),
- *   so the equivalent background fill is 0, NOT MaxIntensity. Filling with
- *   MaxIntensity here would turn the whole outside-ROI region into one giant
- *   bright blob and cause false detections. Same intent, convention-flipped value.
- *
- * Because the inside background is also ~0, the ROI edge introduces no bright
- * step and produces no false blobs — and we additionally drop any peak whose
- * centre falls outside the mask. Mask first, detect second.
+ *   WHY NOT zero-out everything outside the ROI before blurring (the obvious
+ *   "mask first" approach)? Two bugs:
+ *     1. The relative 'log' threshold is `(T/255) × max blob strength`. If the max
+ *        is taken over only the in-ROI content, then drawing a smaller ROI that
+ *        excludes the brightest cells LOWERS the bar and detects MORE faint cells
+ *        — a smaller region yielding a higher count, which is wrong and confusing.
+ *        Computing the reference over the full image keeps the bar ROI-independent,
+ *        so the in-ROI result is always a strict subset of the whole-image result.
+ *     2. Zeroing creates an artificial high-contrast EDGE along the ROI boundary
+ *        whenever the background isn't ~0, and the Laplacian fires on it → false
+ *        detections just inside the edge (the very thing todo.txt Phase 6 warns
+ *        about). Not touching the pixels avoids the edge entirely.
+ *   A blob centred OUTSIDE the ROI keeps its peak outside (Gaussian blur doesn't
+ *   move an isolated peak), so the centre-in-ROI test cleanly excludes it without
+ *   needing to blank the region. The mask is applied AFTER thresholding (so it
+ *   can't change the bar) and BEFORE NMS (so an out-of-ROI peak can't suppress an
+ *   in-ROI one).
  *
  * @param {Float32Array} gray - raw channel intensity (0–255), NOT yet inverted
  * @param {number} width
@@ -61,26 +67,29 @@ import { nonMaxSuppression } from './nms.js';
 export function detectChannel(gray, width, height, params, mask = null) {
   const { R, Dmin, T, fluorescent, thresholdMode = 'log' } = params;
 
-  // Step A: map into bright-blob space and apply the AOI mask.
+  // Step A: map into bright-blob space (no masking here — see the note above).
   const n = width * height;
   const proc = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    let v = fluorescent ? gray[i] : 255 - gray[i];
-    if (mask && mask[i] === 0) v = 0; // outside AOI → background
-    proc[i] = v;
-  }
+  for (let i = 0; i < n; i++) proc[i] = fluorescent ? gray[i] : 255 - gray[i];
 
   // Step B + C: Laplacian of Gaussian.
   const sigma = DERIVE.sigma(R);
   const blurred = gaussianBlur(proc, width, height, sigma);
   const log = laplacian(blurred, width, height);
 
-  // Local maxima of -LoG (bright-blob centres), confined to the AOI.
+  // Local maxima of -LoG (bright-blob centres) over the WHOLE image, so the
+  // relative threshold reference below is image-global and ROI-independent.
   const nbRadius = Math.max(1, Math.round(R / 2));
-  const peaks = findLocalMaxima(log, proc, width, height, nbRadius, mask);
+  const peaks = findLocalMaxima(log, proc, width, height, nbRadius);
 
-  // Step D: threshold (intensity or relative LoG). Step E: min separation.
-  const candidates = applyThreshold(peaks, thresholdMode, T);
+  // Step D: threshold (intensity or relative LoG — reference is the global max).
+  let candidates = applyThreshold(peaks, thresholdMode, T);
+  // AOI restriction: keep only cells whose centre is inside the ROI. After the
+  // threshold (so the ROI never moves the bar), before NMS (so an out-of-ROI peak
+  // can't suppress an in-ROI one).
+  if (mask) candidates = candidates.filter((c) => mask[c.y * width + c.x] === 1);
+
+  // Step E: min separation.
   return nonMaxSuppression(candidates, Dmin);
 }
 
@@ -97,17 +106,16 @@ export function detect(rgba, width, height, params) {
 }
 
 /**
- * Scan for pixels that are a local maximum of -LoG within `nbRadius`, inside the
- * AOI. Records both blob strength and underlying intensity so the threshold step
- * can filter by either. Background (LoG ≈ 0) is skipped cheaply via strength > 0.
+ * Scan for pixels that are a local maximum of -LoG within `nbRadius` over the
+ * whole image. Records both blob strength and underlying intensity so the
+ * threshold step can filter by either. Background (LoG ≈ 0) is skipped cheaply via
+ * strength > 0. (AOI restriction happens after thresholding — see detectChannel.)
  */
-function findLocalMaxima(log, gray, width, height, nbRadius, mask) {
+function findLocalMaxima(log, gray, width, height, nbRadius) {
   const candidates = [];
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
-      if (mask && mask[idx] === 0) continue; // never detect outside the AOI
-
       const strength = -log[idx]; // bright-blob centres have strength > 0
       if (strength <= 0) continue;
 

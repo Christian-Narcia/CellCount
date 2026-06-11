@@ -205,6 +205,21 @@ body {
   border-radius: 50%;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
+/* Combo chips toggle their overlay dots on click. Dots are OFF by default, so the
+   resting chip is plain; switching one ON outlines/highlights the chip. */
+.count-chip--combo {
+  cursor: pointer;
+  user-select: none;
+  border-radius: 6px;
+  padding: 1px 5px;
+  border: 1px solid transparent;
+}
+.count-chip--combo:hover { background: rgba(255, 255, 255, 0.06); }
+.count-chip--combo.is-on {
+  border-color: var(--accent);
+  background: rgba(0, 229, 255, 0.1);
+  font-weight: 600;
+}
 
 button {
   background: var(--accent);

@@ -80,6 +80,7 @@ let maskMatrix = null;      // ROI rasterised to a Uint8Array 0/1 (the AOI mask)
 let dims = null;            // { width, height } — set by the first CHANNEL image
 let lastResults = {};       // { r: cells[], g: cells[], ... } from the worker
 let lastColoc = {};         // { 'r+g': cells[], ... } from the coloc pass
+const colocDotsOn = new Set(); // combo keys whose dots the user has switched on (default: all off)
 let busy = false;           // a detection is in flight
 let queued = false;         // a newer detection request arrived while busy
 let lastDetectSig = null;   // signature of the last dispatched detection (see below)
@@ -370,11 +371,12 @@ function renderMarkers() {
     if (!cells || !cells.length || !visible(c.key)) continue;
     groups.push({ cells, color: colorOf(c.key), kind: 'ring', radius: controls.getChannelParams(c.key).R });
   }
-  // Co-localization dots on top, only when all member channels are visible.
+  // Co-localization dots on top: OFF by default — only drawn for combos the user
+  // has switched on (click its chip) and whose member channels are all visible.
   const coR = controls.getParams().coR;
   for (const combo of Object.keys(lastColoc)) {
     const cells = lastColoc[combo];
-    if (!cells.length) continue;
+    if (!cells.length || !colocDotsOn.has(combo)) continue;
     const members = combo.split('+');
     if (!members.every(visible)) continue;
     groups.push({ cells, color: mixColors(members.map(colorOf)), kind: 'dot', radius: coR });
@@ -395,13 +397,19 @@ function updateCounts() {
   }
   for (const combo of Object.keys(lastColoc)) {
     const label = combo.split('+').map((k) => k.toUpperCase()).join('+');
-    parts.push(chip(mixColors(combo.split('+').map(colorOf)), label, lastColoc[combo].length));
+    const color = mixColors(combo.split('+').map(colorOf));
+    parts.push(comboChip(color, label, lastColoc[combo].length, combo, colocDotsOn.has(combo)));
   }
   el.breakdown.innerHTML = parts.join('');
 }
 
 const chip = (color, label, n) =>
   `<span class="count-chip"><span class="count-chip__dot" style="background:${color}"></span>${label} ${n}</span>`;
+
+/** A clickable combo chip — toggles whether that combination draws its dots. */
+const comboChip = (color, label, n, combo, on) =>
+  `<span class="count-chip count-chip--combo${on ? ' is-on' : ''}" data-combo="${combo}" title="Show/hide ${label} dots">` +
+  `<span class="count-chip__dot" style="background:${color}"></span>${label} ${n}</span>`;
 const totalCells = () => CHANNELS.reduce((sum, c) => sum + (lastResults[c.key] ? lastResults[c.key].length : 0), 0);
 const colorFromConfig = (key) => (CHANNELS.find((c) => c.key === key) || {}).defaultColor || '#ffffff';
 
@@ -451,6 +459,17 @@ function aoiPixelArea() {
   for (let i = 0; i < maskMatrix.length; i++) if (maskMatrix[i]) n++;
   return n;
 }
+
+// ---- Co-loc dot toggles (click a combo chip to show/hide its dots) --------
+el.breakdown.addEventListener('click', (e) => {
+  const chipEl = e.target.closest('[data-combo]');
+  if (!chipEl) return;
+  const combo = chipEl.dataset.combo;
+  if (colocDotsOn.has(combo)) colocDotsOn.delete(combo);
+  else colocDotsOn.add(combo);
+  chipEl.classList.toggle('is-on', colocDotsOn.has(combo));
+  renderMarkers();
+});
 
 // ---- View results (modal) -------------------------------------------------
 el.viewBtn.addEventListener('click', () => {

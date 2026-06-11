@@ -6,9 +6,11 @@
  * finds cells that co-locate across all members of the combo within a radius
  * Co-R. Pure and DOM-free.
  *
- * Combinations reported (matching the ITCN todo): every PAIR of loaded eligible
- * channels, plus the FULL set when 3+ are loaded — e.g. for R/G/B loaded:
- * R+G, R+B, G+B, and R+G+B.
+ * Combinations reported: EVERY combination of loaded eligible channels of size
+ * ≥ 2 — all pairs, all triples, … up to the full set. E.g. for R/G/B loaded:
+ * R+G, R+B, G+B, R+G+B; add Gray and you also get R+Gray, …, R+G+B, …, R+G+B+Gray.
+ * (So a partial combo like R+G+B is always reported even when more channels are
+ * eligible — it is not collapsed into only the full set.)
  *
  * A cell in the combo's ANCHOR channel (the first, in the given key order)
  * qualifies as co-localized if every OTHER channel in the combo has a cell
@@ -73,16 +75,32 @@ export function colocalizationByCell(perChannel, keys, coR) {
   return out;
 }
 
-/** Every 2-subset of `keys`, plus the full set when there are 3 or more. */
+/**
+ * Every combination (subset) of `keys` of size ≥ 2, ordered by size ascending then
+ * by the channel order in `keys` — e.g. [r,g,b] → r+g, r+b, g+b, r+g+b. So adding
+ * a 4th eligible channel yields all pairs, all triples, and the 4-way set (and the
+ * existing triples like r+g+b are kept, not replaced by the full set).
+ */
 export function buildCombos(keys) {
   const combos = [];
-  for (let i = 0; i < keys.length; i++) {
-    for (let j = i + 1; j < keys.length; j++) {
-      combos.push([keys[i], keys[j]]);
-    }
+  for (let size = 2; size <= keys.length; size++) {
+    addSubsetsOfSize(keys, size, 0, [], combos);
   }
-  if (keys.length >= 3) combos.push([...keys]);
   return combos;
+}
+
+/** Recursively collect every size-`size` subset of keys[start..] into `out`. */
+function addSubsetsOfSize(keys, size, start, current, out) {
+  if (current.length === size) {
+    out.push(current.slice());
+    return;
+  }
+  // Stop early when not enough keys remain to reach `size`.
+  for (let i = start; i <= keys.length - (size - current.length); i++) {
+    current.push(keys[i]);
+    addSubsetsOfSize(keys, size, i + 1, current, out);
+    current.pop();
+  }
 }
 
 /**
