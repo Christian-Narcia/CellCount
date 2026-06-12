@@ -10,8 +10,12 @@
  *   2. The PER-CELL TABLE — one row per detected cell across all channels, with
  *      columns: cell_id, channel, x, y, intensity, inside_aoi, colocalized_with.
  *
- * `inside_aoi` is always true: detection is AOI-masked, so a cell is only ever
- * emitted from inside the ROI (and with no ROI the whole image is the AOI).
+ * For DETECTED cells `inside_aoi` is always true: detection is AOI-masked, so a
+ * cell is only ever emitted from inside the ROI (and with no ROI the whole image
+ * is the AOI). MANUALLY-placed markers (Phase 11) are CHANNEL-ATTRIBUTED — each is
+ * appended as a row for its own channel id (not a neutral 'manual' channel) and
+ * folded into that channel's summary count, with `inside_aoi` computed from the
+ * mask (they can land outside the ROI) and no intensity / co-localization.
  * `colocalized_with` is the `+`-joined list of OTHER channels co-localized with
  * that cell within Co-R (symmetric — see colocalize.js colocalizationByCell).
  */
@@ -26,11 +30,16 @@ import { colocalizationByCell } from '../algorithm/colocalize.js';
  * @param {number} [options.coR] - co-localization radius (px)
  * @param {Record<string, {color:string}>} [options.styles] - per-channel display styles (colours)
  * @param {number|null} [options.aoiArea] - AOI area in pixels (mask 1-count, or full image)
+ * @param {Array<{channel:string,x:number,y:number,inside:boolean}>} [options.manual] - hand-placed, channel-attributed markers
  * @returns {string} CSV text (summary block + header + rows)
  */
 export function resultsToCsv(perChannel, options = {}) {
-  const { coloc = {}, colocKeys = [], coR = 0, styles = {}, aoiArea = null } = options;
+  const { coloc = {}, colocKeys = [], coR = 0, styles = {}, aoiArea = null, manual = [] } = options;
   const channels = Object.keys(perChannel);
+
+  // Manual markers folded into per-channel counts (they belong to a channel).
+  const manualByChannel = {};
+  for (const m of manual) manualByChannel[m.channel] = (manualByChannel[m.channel] || 0) + 1;
 
   // ---- Summary block (commented so the data table stays parseable) ----
   const summary = ['# ITCN Cell Counter — results', `# Generated: ${new Date().toISOString()}`];
@@ -38,7 +47,7 @@ export function resultsToCsv(perChannel, options = {}) {
   summary.push('#', '# Channel,Color,Count');
   for (const ch of channels) {
     const color = (styles[ch] && styles[ch].color) || '';
-    summary.push(`# ${ch},${color},${perChannel[ch].length}`);
+    summary.push(`# ${ch},${color},${perChannel[ch].length + (manualByChannel[ch] || 0)}`);
   }
   const comboKeys = Object.keys(coloc);
   if (comboKeys.length) {
@@ -58,6 +67,11 @@ export function resultsToCsv(perChannel, options = {}) {
       const colocWith = (cellColoc[i] || []).join('+');
       rows.push(`${id++},${ch},${c.x},${c.y},${Math.round(c.intensity)},true,${colocWith}`);
     });
+  }
+  // Manual markers: attributed to their channel; no intensity / co-localization;
+  // inside_aoi computed per-point.
+  for (const m of manual) {
+    rows.push(`${id++},${m.channel},${m.x},${m.y},,${m.inside},`);
   }
 
   return [...summary, header, ...rows].join('\n');

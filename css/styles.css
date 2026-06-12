@@ -135,6 +135,58 @@ body {
 }
 .channel-slot__eye input { accent-color: var(--slot-color); cursor: pointer; }
 
+/* ROI rotate/move editor — revealed (roiControls.js) once an ROI is loaded. */
+.roi-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--panel-border);
+}
+.roi-controls[hidden] { display: none; }
+.roi-controls__heading { font-size: 0.8rem; color: var(--text-dim); }
+.roi-controls__row { display: flex; align-items: center; gap: 8px; }
+.roi-controls__row label { font-size: 0.85rem; color: var(--text-dim); }
+.roi-controls__rot {
+  width: 70px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.roi-controls__unit { color: var(--text-dim); font-size: 0.85rem; }
+.roi-controls__row .btn-secondary { flex: 1; }
+.roi-controls__move.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0, 229, 255, 0.08);
+}
+
+/* Manual-marker tool (Phase 11) — "Add markers" toggle + channel selector + reset. */
+.manual-tools { margin-bottom: 10px; }
+.manual-tools__btn { width: 100%; }
+.manual-tools__btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0, 229, 255, 0.08);
+}
+.manual-tools__row { display: flex; gap: 8px; margin-top: 6px; }
+.manual-tools__channel {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+.manual-tools__reset { flex: none; }
+
 .control { display: flex; flex-direction: column; gap: 6px; }
 .control label {
   display: flex;
@@ -232,8 +284,8 @@ button {
 }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.results__actions { display: flex; gap: 8px; }
-.results__actions button { flex: 1; }
+.results__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.results__actions button { flex: 1 1 30%; min-width: 90px; }
 .btn-secondary {
   background: transparent;
   color: var(--text);

@@ -51,6 +51,40 @@ export function colocalize(perChannel, keys, coR) {
 }
 
 /**
+ * Count cells co-localized across ALL of `keys` (the full intersection) within
+ * Co-R — anchor-based, like colocalize() but only the single full-set combo and
+ * returning just the count. Used for the headline "overlapping count" across the
+ * currently-active channels (Phase 12): a cell counts once if the anchor channel
+ * has a cell that has a neighbour within Co-R in EVERY other active channel.
+ *
+ * If fewer than 2 keys are given, or any requested channel has zero cells, the
+ * intersection is empty → 0.
+ *
+ * @param {Record<string, Array<{x:number,y:number}>>} perChannel
+ * @param {string[]} keys - channel keys to intersect, IN ORDER (anchor first)
+ * @param {number} coR - co-localization radius in px
+ * @returns {number} count of cells present in all `keys` within Co-R
+ */
+export function colocalizeAll(perChannel, keys, coR) {
+  if (keys.length < 2) return 0;
+  for (const k of keys) if (!perChannel[k] || !perChannel[k].length) return 0;
+  const [anchor, ...rest] = keys;
+  const r2 = coR * coR;
+  let count = 0;
+  for (const cell of perChannel[anchor]) {
+    let ok = true;
+    for (const other of rest) {
+      if (!hasNeighborWithin(perChannel[other], cell, r2)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) count++;
+  }
+  return count;
+}
+
+/**
  * Per-cell, SYMMETRIC co-localization: for every cell in every eligible loaded
  * channel, which OTHER channels have a cell within Co-R of it. Unlike colocalize()
  * (anchor-based, for counting combos), this is symmetric — a cell in G that sits

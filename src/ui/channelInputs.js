@@ -1,7 +1,9 @@
 /**
  * channelInputs.js — Builds the R / G / B / Gray channel slots and the AOI-mask
- * slot, and owns each channel's DISPLAY style (colour, opacity, visibility) plus
- * the global blend mode. Generated from config (CHANNELS, ROI_INPUT, COMPOSITE).
+ * slot, and owns each channel's style: MARKER colour (the picker controls marker/
+ * dot colour only — the composite display colour is fixed at the config default,
+ * Phase 4), opacity, and visibility, plus the global blend mode. Generated from
+ * config (CHANNELS, ROI_INPUT, COMPOSITE).
  *
  * Two kinds of event are emitted, kept separate on purpose:
  *   • onFile / onClear — a channel's IMAGE DATA changed → caller re-composites
@@ -34,6 +36,9 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
   let mode = COMPOSITE.defaultMode;
   /** @type {Record<string, HTMLElement>} */
   const statusEls = {};
+  /** Per-channel visibility widgets, so the keyboard shortcuts can drive them. */
+  /** @type {Record<string, { slot: HTMLElement, eye: HTMLInputElement }>} */
+  const visUI = {};
 
   // ---- Global blend-mode selector (display-only) ----
   const modeWrap = el('div', 'control composite-mode');
@@ -98,11 +103,13 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
       const color = el('input', 'channel-slot__color');
       color.type = 'color';
       color.value = style.color;
-      color.title = 'Channel colour';
+      // Picker controls MARKER colour only — the composite display colour is fixed
+      // at the channel's config default (Phase 4). See composite.js / overlay.js.
+      color.title = 'Marker colour (composite colour is fixed)';
       color.addEventListener('input', () => {
         style.color = color.value;
         slot.style.setProperty('--slot-color', color.value);
-        onComposite();
+        onComposite(); // repaints markers in the new colour (composite unchanged)
       });
 
       const opacity = el('input', 'channel-slot__opacity');
@@ -128,6 +135,7 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
         onComposite();
       });
       eyeLabel.append(eye);
+      visUI[def.key] = { slot, eye };
 
       styleRow.append(color, opacity, eyeLabel);
       slot.append(styleRow);
@@ -167,6 +175,20 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
     },
     getCompositeSettings() {
       return { styles, mode };
+    },
+    /**
+     * Flip a channel's visibility (keyboard shortcut path). Updates the state,
+     * the eye checkbox, and the slot's dimmed style, then fires onComposite so the
+     * caller repaints — exactly as clicking the eye toggle does.
+     */
+    toggleVisibility(key) {
+      const ui = visUI[key];
+      if (!ui || !styles[key]) return;
+      const visible = !styles[key].visible;
+      styles[key].visible = visible;
+      ui.eye.checked = visible;
+      ui.slot.classList.toggle('is-hidden', !visible);
+      onComposite();
     },
   };
 }

@@ -12,6 +12,7 @@
  *   12-13  bottom             (int16)
  *   14-15  right              (int16)
  *   16-17  n coordinates      (uint16)
+ *   36-39  rotation (degrees) (float32, FLOAT_PARAM_1 — 0/NaN = none)
  *   64..   X coords           (n × int16, relative to `left`)
  *   64+2n  Y coords           (n × int16, relative to `top`)
  *
@@ -54,7 +55,7 @@ export function roiTypeName(type) {
 /**
  * Parse an ImageJ .roi ArrayBuffer.
  * @param {ArrayBuffer} buffer
- * @returns {{ type:number, version:number, bbox:{top:number,left:number,bottom:number,right:number}, n:number, polygon:Array<[number,number]> }}
+ * @returns {{ type:number, version:number, bbox:{top:number,left:number,bottom:number,right:number}, n:number, rotation:number, polygon:Array<[number,number]> }}
  * @throws if the magic is missing or the type is unsupported
  */
 export function parseRoi(buffer) {
@@ -73,6 +74,11 @@ export function parseRoi(buffer) {
   const bottom = view.getInt16(12);
   const right = view.getInt16(14);
   const n = view.getUint16(16);
+  // Rotation angle in degrees — ImageJ stores it as a big-endian float at offset
+  // 36 (FLOAT_PARAM_1). 0 or NaN means the ROI is not rotated. We surface this so
+  // the UI can display it; the user can adjust it further (see ui/roiControls.js).
+  const rotationRaw = view.getFloat32(36);
+  const rotation = Number.isFinite(rotationRaw) ? rotationRaw : 0;
   const bbox = { top, left, bottom, right };
 
   let polygon;
@@ -103,7 +109,7 @@ export function parseRoi(buffer) {
     );
   }
 
-  return { type, version, bbox, n, polygon };
+  return { type, version, bbox, n, rotation, polygon };
 }
 
 /** Sample an axis-aligned ellipse (inscribed in the bbox) into `segments` points. */

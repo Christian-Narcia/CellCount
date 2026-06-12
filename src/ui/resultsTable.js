@@ -115,7 +115,7 @@ function cellTable(cells) {
         c.channel.toUpperCase(),
         String(c.x),
         String(c.y),
-        String(c.intensity),
+        c.intensity === '' || c.intensity == null ? '—' : String(c.intensity),
         c.colocalizedWith ? c.colocalizedWith.toUpperCase() : '—',
       ])
     );

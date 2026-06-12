@@ -63,3 +63,23 @@ export function rasterizePolygon(polygon, width, height) {
   }
   return mask;
 }
+
+/**
+ * Point-in-AOI test for a single (x, y) image coordinate. With no mask the whole
+ * image is the AOI (→ true). Used to compute `inside_aoi` for manually-placed
+ * markers, which — unlike detected cells — can land outside the ROI.
+ *
+ * @param {Uint8Array|null} mask - 1 inside / 0 outside, or null for "no ROI"
+ * @param {number} width
+ * @param {number} height
+ * @param {number} x
+ * @param {number} y
+ * @returns {boolean}
+ */
+export function maskContains(mask, width, height, x, y) {
+  if (!mask) return true; // no ROI → the whole image is the AOI
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  if (xi < 0 || yi < 0 || xi >= width || yi >= height) return false;
+  return mask[yi * width + xi] === 1;
+}

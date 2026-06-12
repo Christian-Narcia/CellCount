@@ -23,11 +23,14 @@
 
 import { DEFAULT_PARAMS, CHANNELS, ROI_INPUT } from './config.js';
 import { decodeFile } from './core/imageDecoder.js';
-import { colocalize, colocalizationByCell } from './algorithm/colocalize.js';
+import { colocalize, colocalizationByCell, colocalizeAll } from './algorithm/colocalize.js';
 import { extractChannel, maskCoverage, sameSize } from './core/channelExtract.js';
 import { parseRoi, roiTypeName } from './core/roiParser.js';
-import { rasterizePolygon } from './core/rasterize.js';
+import { rasterizePolygon, maskContains } from './core/rasterize.js';
+import { transformPolygon, polygonCenter } from './core/roiTransform.js';
 import { initChannelInputs } from './ui/channelInputs.js';
+import { createRoiControls } from './ui/roiControls.js';
+import { createManualMarkers } from './ui/manualMarkers.js';
 import { buildComposite } from './ui/composite.js';
 import { createCanvasLayers } from './ui/canvasLayers.js';
 import { drawAoiBoundary } from './ui/aoiBoundary.js';
@@ -35,20 +38,26 @@ import { createViewport } from './ui/viewport.js';
 import { initControls } from './ui/controls.js';
 import { drawMarkerGroups } from './ui/overlay.js';
 import { createResultsModal } from './ui/resultsTable.js';
+import { createChannelShortcuts } from './ui/shortcuts.js';
 import { downloadCsv } from './export/csv.js';
+import { downloadPng } from './export/png.js';
 
 // ---- DOM references -------------------------------------------------------
 const el = {
   channelInputs: document.getElementById('channel-inputs'),
+  roiControls: document.getElementById('roi-controls'),
+  manualTools: document.getElementById('manual-tools'),
   placeholder: document.getElementById('stage-placeholder'),
   baseCanvas: document.getElementById('base-canvas'),
   aoiCanvas: document.getElementById('aoi-canvas'),
   overlayCanvas: document.getElementById('overlay-canvas'),
   controls: document.getElementById('controls'),
   count: document.getElementById('cell-count'),
+  countLabel: document.getElementById('cell-count-label'),
   status: document.getElementById('status'),
   breakdown: document.getElementById('count-breakdown'),
   exportBtn: document.getElementById('export-btn'),
+  exportPngBtn: document.getElementById('export-png-btn'),
   viewBtn: document.getElementById('view-btn'),
   stage: document.getElementById('stage'),
   canvasWrap: document.getElementById('canvas-wrap'),
@@ -72,6 +81,38 @@ const worker = new Worker(new URL('./workers/detector.worker.js', import.meta.ur
   type: 'module',
 });
 const resultsModal = createResultsModal();
+
+// ROI rotate/move editor. Owns the live transform; on a live edit (drag/typing)
+// we re-rasterise + redraw the boundary, and on commit we re-detect (the mask
+// gate changed). See ui/roiControls.js.
+const roiControls = createRoiControls(el.roiControls, {
+  moveTarget: el.overlayCanvas,
+  getScale: () => viewport.getScale(),
+  onTransform: () => {
+    if (!dims || !roi) return; // editor can be open before any channel is loaded
+    applyRoi();
+    drawAoiBoundary(layers.aoiCtx, maskMatrix, dims.width, dims.height);
+  },
+  onCommit: () => {
+    if (dims && roi) runDetection();
+  },
+  onActivate: () => manualMarkers.deactivate(), // only one canvas tool at a time
+});
+
+// Manual-marker tool. Owns the hand-placed, CHANNEL-ATTRIBUTED markers; on a
+// change we just re-render + re-count (no detection — they're annotations). Each
+// marker belongs to a channel (counts toward that channel's total). Shares the
+// overlay canvas with the ROI move tool, so each switches the other off on activation.
+const manualMarkers = createManualMarkers(el.manualTools, {
+  canvas: el.overlayCanvas,
+  channels: CHANNELS,
+  onActivate: () => roiControls.deactivate(),
+  onChange: () => {
+    renderMarkers();
+    updateCounts();
+    updateResultAvailability();
+  },
+});
 
 /** Loaded inputs. dims is the shared {width,height}; null until first load. */
 const channels = Object.fromEntries(CHANNELS.map((c) => [c.key, null])); // Float32Array per channel
@@ -131,6 +172,7 @@ const inputs = initChannelInputs(el.channelInputs, {
     if (key === ROI_INPUT.key) {
       roi = null;
       maskMatrix = null;
+      roiControls.hide();
     } else {
       channels[key] = null;
     }
@@ -138,6 +180,18 @@ const inputs = initChannelInputs(el.channelInputs, {
     else refresh();
   },
   onFile: (key, file) => (key === ROI_INPUT.key ? loadRoi(file) : loadChannel(key, file)),
+});
+
+// Keyboard shortcuts: each channel's `shortcutKey` (R/G/B/Y) toggles that
+// channel's visibility (simple toggle). Only fires for loaded channels and never
+// while typing in a field. See ui/shortcuts.js.
+const shortcutKeyMap = Object.fromEntries(
+  CHANNELS.filter((c) => c.shortcutKey).map((c) => [c.shortcutKey, c.key])
+);
+createChannelShortcuts({
+  keyMap: shortcutKeyMap,
+  isLoaded: (key) => Boolean(channels[key]),
+  toggle: (key) => inputs.toggleVisibility(key),
 });
 
 async function loadChannel(key, file) {
@@ -178,6 +232,7 @@ async function loadRoi(file) {
   try {
     inputs.setStatus(ROI_INPUT.key, `parsing ${file.name}…`);
     roi = parseRoi(await file.arrayBuffer());
+    roiControls.show(roi.rotation); // seed rotation from the file, reveal the editor
     if (dims) {
       applyRoi();
       refresh(); // re-detect within the new ROI + redraw its boundary
@@ -187,24 +242,43 @@ async function loadRoi(file) {
   } catch (err) {
     roi = null;
     maskMatrix = null;
+    roiControls.hide();
     inputs.setStatus(ROI_INPUT.key, `failed: ${err.message}`, true);
     setStatus(`Failed to load ${file.name}: ${err.message}`, true);
   }
 }
 
-/** Rasterise the parsed ROI to the AOI mask at the current image size. */
+/**
+ * Rasterise the parsed ROI to the AOI mask at the current image size, applying
+ * the user's rotate/move transform first (pivoting about the original polygon's
+ * centre so repeated edits never drift). Re-run on every live transform edit.
+ */
 function applyRoi() {
   if (!roi || !dims) return;
-  const { bbox } = roi;
-  if (bbox.left < 0 || bbox.top < 0 || bbox.right > dims.width || bbox.bottom > dims.height) {
+  const t = roiControls.getTransform();
+  // Pivot about the ORIGINAL polygon centre so rotation stays stable across edits.
+  const polygon = transformPolygon(roi.polygon, t, polygonCenter(roi.polygon));
+
+  // Warn against the TRANSFORMED bounds — the shape may now extend off-image.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of polygon) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  if (minX < 0 || minY < 0 || maxX > dims.width || maxY > dims.height) {
     setStatus(
-      `ROI bounds (${bbox.left},${bbox.top})–(${bbox.right},${bbox.bottom}) extend beyond the ${dims.width}×${dims.height} image.`,
+      `ROI bounds (${Math.round(minX)},${Math.round(minY)})–(${Math.round(maxX)},${Math.round(maxY)}) extend beyond the ${dims.width}×${dims.height} image.`,
       true
     );
   }
-  maskMatrix = rasterizePolygon(roi.polygon, dims.width, dims.height);
+
+  maskMatrix = rasterizePolygon(polygon, dims.width, dims.height);
   const pct = Math.round(maskCoverage(maskMatrix) * 100);
-  inputs.setStatus(ROI_INPUT.key, `${roiTypeName(roi.type)} · ${pct}% inside`);
+  const deg = Math.round(t.angle * 10) / 10;
+  const rot = deg !== 0 ? ` · ${deg}°` : ''; // omit when not rotated
+  inputs.setStatus(ROI_INPUT.key, `${roiTypeName(roi.type)} · ${pct}% inside${rot}`);
 }
 
 /**
@@ -224,6 +298,7 @@ function refresh() {
   drawAoiBoundary(layers.aoiCtx, maskMatrix, dims.width, dims.height);
   el.stage.classList.add('has-image');
   el.placeholder.hidden = true;
+  el.exportPngBtn.disabled = false; // the view can be exported whenever an image is shown
   if (el.zoomToolbar.hidden) {
     el.zoomToolbar.hidden = false;
     viewport.fit();
@@ -247,6 +322,9 @@ function recompose() {
     // Marker colour + visibility follow the channel styles, so repaint them too
     // (still no re-detection — the cell coordinates haven't changed).
     renderMarkers();
+    // The headline depends on which channels are ACTIVE (visible), and chip
+    // colours follow the marker colours, so refresh the counts display too.
+    updateCounts();
   });
 }
 
@@ -254,6 +332,8 @@ function resetStage() {
   dims = null;
   roi = null;
   maskMatrix = null;
+  roiControls.hide();
+  manualMarkers.clear();
   lastResults = {};
   lastColoc = {};
   lastDetectSig = null;
@@ -263,8 +343,10 @@ function resetStage() {
   el.placeholder.hidden = false;
   el.zoomToolbar.hidden = true;
   el.count.textContent = '0';
+  if (el.countLabel) el.countLabel.textContent = 'cells';
   el.breakdown.textContent = '';
   el.exportBtn.disabled = true;
+  el.exportPngBtn.disabled = true;
   el.viewBtn.disabled = true;
   resultsModal.close();
   setStatus('Load one or more channels to begin.');
@@ -336,9 +418,7 @@ worker.onmessage = (e) => {
     renderMarkers();
     updateCounts();
     setStatus(`Detected in ${data.took.toFixed(0)} ms`);
-    const noCells = totalCells() === 0;
-    el.exportBtn.disabled = noCells;
-    el.viewBtn.disabled = noCells;
+    updateResultAvailability();
   }
 
   // Re-run with the latest params if a request arrived while we were busy.
@@ -365,11 +445,11 @@ function renderMarkers() {
   const colorOf = (key) => (styles[key] && styles[key].color) || colorFromConfig(key);
 
   const groups = [];
-  // Per-channel rings — each at that channel's own R (per-channel tuning, Phase 9).
+  // Per-channel cells — small fixed-radius dots in the channel colour (Phase 11).
   for (const c of CHANNELS) {
     const cells = lastResults[c.key];
     if (!cells || !cells.length || !visible(c.key)) continue;
-    groups.push({ cells, color: colorOf(c.key), kind: 'ring', radius: controls.getChannelParams(c.key).R });
+    groups.push({ cells, color: colorOf(c.key), kind: 'cell' });
   }
   // Co-localization dots on top: OFF by default — only drawn for combos the user
   // has switched on (click its chip) and whose member channels are all visible.
@@ -381,19 +461,61 @@ function renderMarkers() {
     if (!members.every(visible)) continue;
     groups.push({ cells, color: mixColors(members.map(colorOf)), kind: 'dot', radius: coR });
   }
+  // Hand-placed markers on top — one group per channel, drawn as squares in that
+  // channel's marker colour and hidden when the channel is hidden (same as its dots).
+  const manualByChannel = manualMarkers.getChannelMarkers();
+  for (const c of CHANNELS) {
+    const list = manualByChannel[c.key];
+    if (!list || !list.length || !visible(c.key)) continue;
+    groups.push({ cells: list, color: colorOf(c.key), kind: 'manual' });
+  }
   drawMarkerGroups(layers.overlayCtx, groups, controls.getParams().R);
 }
 
-/** Total count + per-channel and per-combo chips. */
+/**
+ * The headline "big number" (Phase 12). The naive sum of all channels is NOT
+ * meaningful for multi-channel fluorescence (it double-counts co-localized cells),
+ * so instead:
+ *   • 0 active channels → 0.
+ *   • 1 active channel  → that channel's own count (detected + its manual markers).
+ *   • ≥2 active channels → the OVERLAPPING count: cells co-localized across ALL
+ *     currently-active channels within Co-R (the intersection, not a sum).
+ * "Active" = loaded AND visible (eye on). The per-channel / per-combo breakdown
+ * chips still show the full picture; this is only the single headline number.
+ */
+function headlineCount() {
+  const active = activeChannelKeys();
+  if (active.length === 0) return 0;
+  if (active.length === 1) {
+    const k = active[0];
+    return (lastResults[k] ? lastResults[k].length : 0) + manualMarkers.count(k);
+  }
+  return colocalizeAll(lastResults, active, controls.getParams().coR);
+}
+
+/** Loaded AND visible channel keys, in declaration order ("active" channels). */
+function activeChannelKeys() {
+  const { styles } = inputs.getCompositeSettings();
+  return CHANNELS.filter((c) => channels[c.key] && (!styles[c.key] || styles[c.key].visible)).map((c) => c.key);
+}
+
+/**
+ * Headline number + label + per-channel and per-combo chips. A channel's manual
+ * markers are folded into that channel's count (not tracked as a separate group).
+ */
 function updateCounts() {
-  el.count.textContent = String(totalCells());
+  const active = activeChannelKeys();
+  el.count.textContent = String(headlineCount());
+  // Clarify what the number means: a single channel's count vs the cross-channel overlap.
+  if (el.countLabel) el.countLabel.textContent = active.length > 1 ? 'overlapping' : 'cells';
   const { styles } = inputs.getCompositeSettings();
   const colorOf = (key) => (styles[key] && styles[key].color) || colorFromConfig(key);
   const parts = [];
   for (const c of CHANNELS) {
-    const cells = lastResults[c.key];
-    if (!cells) continue;
-    parts.push(chip(colorOf(c.key), c.key.toUpperCase(), cells.length));
+    const detected = lastResults[c.key] ? lastResults[c.key].length : 0;
+    const manual = manualMarkers.count(c.key);
+    if (!lastResults[c.key] && !manual) continue; // nothing loaded/placed for this channel
+    parts.push(chip(colorOf(c.key), c.key.toUpperCase(), detected + manual));
   }
   for (const combo of Object.keys(lastColoc)) {
     const label = combo.split('+').map((k) => k.toUpperCase()).join('+');
@@ -401,6 +523,15 @@ function updateCounts() {
     parts.push(comboChip(color, label, lastColoc[combo].length, combo, colocDotsOn.has(combo)));
   }
   el.breakdown.innerHTML = parts.join('');
+}
+
+const manualCount = () => manualMarkers.total();
+
+/** Enable export/view when there's anything to report (detected or manual). */
+function updateResultAvailability() {
+  const any = totalCells() + manualCount() > 0;
+  el.exportBtn.disabled = !any;
+  el.viewBtn.disabled = !any;
 }
 
 const chip = (color, label, n) =>
@@ -440,7 +571,7 @@ el.zoomPct.addEventListener('click', () => viewport.zoomTo(1)); // 1:1
 
 // ---- Export ---------------------------------------------------------------
 el.exportBtn.addEventListener('click', () => {
-  if (!totalCells()) return;
+  if (!totalCells() && !manualCount()) return;
   const { styles } = inputs.getCompositeSettings();
   downloadCsv(lastResults, {
     coloc: lastColoc,
@@ -448,8 +579,33 @@ el.exportBtn.addEventListener('click', () => {
     coR: controls.getParams().coR,
     styles,
     aoiArea: aoiPixelArea(),
+    manual: manualReportRows(),
   });
 });
+
+// Flatten the visible canvas stack (composite → AOI boundary → markers) to a PNG.
+el.exportPngBtn.addEventListener('click', () => {
+  if (!dims) return;
+  downloadPng([layers.baseCanvas, layers.aoiCanvas, layers.overlayCanvas]);
+});
+
+/** Manual markers flattened with their channel + AOI membership, for export. */
+function manualReportRows() {
+  if (!dims) return [];
+  const byChannel = manualMarkers.getChannelMarkers();
+  const rows = [];
+  for (const c of CHANNELS) {
+    for (const m of byChannel[c.key] || []) {
+      rows.push({
+        channel: c.key,
+        x: m.x,
+        y: m.y,
+        inside: maskContains(maskMatrix, dims.width, dims.height, m.x, m.y),
+      });
+    }
+  }
+  return rows;
+}
 
 /** AOI area in pixels: the mask's inside-count, or the whole image when no ROI. */
 function aoiPixelArea() {
@@ -473,7 +629,7 @@ el.breakdown.addEventListener('click', (e) => {
 
 // ---- View results (modal) -------------------------------------------------
 el.viewBtn.addEventListener('click', () => {
-  if (totalCells()) resultsModal.open(buildReport());
+  if (totalCells() || manualCount()) resultsModal.open(buildReport());
 });
 
 /**
@@ -488,11 +644,14 @@ function buildReport() {
   const coR = controls.getParams().coR;
   const byCell = colocalizationByCell(lastResults, COLOC_KEYS, coR);
 
+  const manualByChannel = manualMarkers.getChannelMarkers();
   const channels = [];
   for (const c of CHANNELS) {
-    const cells = lastResults[c.key];
-    if (!cells) continue;
-    channels.push({ key: c.key, label: c.key.toUpperCase(), color: colorOf(c.key), count: cells.length });
+    const detected = lastResults[c.key] ? lastResults[c.key].length : 0;
+    const manual = manualMarkers.count(c.key);
+    if (!lastResults[c.key] && !manual) continue;
+    // Manual markers are folded into the channel's count (Phase 11).
+    channels.push({ key: c.key, label: c.key.toUpperCase(), color: colorOf(c.key), count: detected + manual });
   }
 
   const combos = [];
@@ -523,8 +682,14 @@ function buildReport() {
       });
     });
   }
+  // Manual markers — no intensity / co-localization; tagged with their channel.
+  for (const c of CHANNELS) {
+    for (const m of manualByChannel[c.key] || []) {
+      cells.push({ id: id++, channel: c.key, x: m.x, y: m.y, intensity: '', colocalizedWith: '' });
+    }
+  }
 
-  return { total: totalCells(), aoiArea: aoiPixelArea(), channels, combos, cells };
+  return { total: totalCells() + manualCount(), aoiArea: aoiPixelArea(), channels, combos, cells };
 }
 
 // ---- Helpers --------------------------------------------------------------

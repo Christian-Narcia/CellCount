@@ -35,15 +35,17 @@ export const DEFAULT_PARAMS = Object.freeze({
  * SEPARATE image file; `component` is what gets extracted from that file — an
  * RGBA byte index (R=0, G=1, B=2) or 'luma' for a grayscale image — and
  * `defaultColor` is the colour it's composited with for display until
- * per-channel colour pickers land (Phase 4).
+ * per-channel colour pickers land (Phase 4). `shortcutKey` is the keyboard key
+ * that toggles this channel's visibility (Phase 11; ui/shortcuts.js).
  */
 export const CHANNELS = Object.freeze([
-  { key: 'r', label: 'Red channel', component: 0, defaultColor: '#ff0000', coloc: true },
-  { key: 'g', label: 'Green channel', component: 1, defaultColor: '#00ff00', coloc: true },
-  { key: 'b', label: 'Blue channel', component: 2, defaultColor: '#0000ff', coloc: true },
+  { key: 'r', label: 'Red channel', component: 0, defaultColor: '#ff0000', coloc: true, shortcutKey: 'r' },
+  { key: 'g', label: 'Green channel', component: 1, defaultColor: '#00ff00', coloc: true, shortcutKey: 'g' },
+  { key: 'b', label: 'Blue channel', component: 2, defaultColor: '#0000ff', coloc: true, shortcutKey: 'b' },
   // Gray is a reference/brightfield layer — detected + counted, but excluded from
   // co-localization combinations (set coloc:true if you want it to participate).
-  { key: 'gray', label: 'Gray channel', component: 'luma', defaultColor: '#ffffff', coloc: true },
+  // Its visibility shortcut is Y (Gray's slot is the 4th; R/G/B are taken).
+  { key: 'gray', label: 'Gray channel', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y' },
 ]);
 
 /**
@@ -122,14 +124,31 @@ export const ACCEPTED_TYPES = Object.freeze({
   tiff: ['.tif', '.tiff'],
 });
 
-/** Overlay marker appearance. The ring radius is the detected cell radius R. */
+/**
+ * Overlay marker appearance. Per-channel cells are drawn as a small filled dot of
+ * fixed radius `dotRadius` (image px, INDEPENDENT of the detection radius R) so
+ * markers stay readable on dense images. Co-localization dots are sized from Co-R
+ * (see overlay.js) and kept larger than `dotRadius` so the two are distinguishable.
+ */
 export const MARKER_STYLE = Object.freeze({
   color: '#00e5ff',
+  /** Fixed per-channel dot radius in image px (not tied to R). */
+  dotRadius: 1.5,
   lineWidth: 1.5,
   showLabels: true,
   labelColor: '#ffffff',
   labelFont: '11px system-ui, sans-serif',
 });
+
+/**
+ * Manual markers (Phase 11) — dots the user places by hand. Each is CHANNEL-
+ * ATTRIBUTED: the user picks which channel a new marker belongs to (ui/
+ * manualMarkers.js), so it counts toward that channel's total and is exported as
+ * that channel id — exactly as if it were a detected cell. They are never part of
+ * detection or co-localization. Drawn in the channel's marker colour as a small
+ * outlined square (overlay.js 'manual' kind) so they stay distinct from the round
+ * detection dots and hide with the channel.
+ */
 
 /**
  * AOI boundary appearance — the dashed edge of the loaded mask. Amber so it

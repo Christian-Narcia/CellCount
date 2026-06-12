@@ -3,11 +3,14 @@
  *
  * Two products, deliberately separate:
  *
- * buildComposite() builds the DISPLAY image only. It honours each channel's
- * colour, opacity, and visibility plus a global blend mode (additive or opacity),
- * using pixel-level math (no CSS opacity) so the painted pixels are physically
- * correct. Detection is entirely separate — the worker detects each channel from
- * its own grayscale matrix — so nothing here ever affects the cell counts.
+ * buildComposite() builds the DISPLAY image only. Each channel's composite colour
+ * is FIXED at its config default (R=red, G=green, B=blue, Gray=white) and is NOT
+ * user-changeable (Phase 4) — the per-channel colour picker drives MARKER colour
+ * only (overlay.js / mixColors), never the image here. It honours each channel's
+ * opacity and visibility plus a global blend mode (additive or opacity), using
+ * pixel-level math (no CSS opacity) so the painted pixels are physically correct.
+ * Detection is entirely separate — the worker detects each channel from its own
+ * grayscale matrix — so nothing here ever affects the cell counts.
  *
  * Channels that aren't loaded contribute nothing.
  */
@@ -21,7 +24,8 @@ const DEFAULT_COLORS = Object.freeze(
 
 /**
  * @typedef {Object} ChannelStyle
- * @property {string} color   - '#rrggbb' tint
+ * @property {string} color   - '#rrggbb' MARKER colour (ignored here; display
+ *                              colour is fixed to the channel's config default)
  * @property {number} opacity - 0–100
  * @property {boolean} visible
  */
@@ -46,7 +50,9 @@ export function buildComposite(width, height, channels, settings = {}) {
       const s = styles[c.key] || {};
       return {
         data: channels[c.key],
-        color: s.color ? hexToRgb(s.color) : DEFAULT_COLORS[c.key],
+        // Composite colour is LOCKED to the config default — the picker's
+        // s.color is deliberately NOT read here (it controls marker colour only).
+        color: DEFAULT_COLORS[c.key],
         alpha: (s.opacity == null ? 100 : s.opacity) / 100,
       };
     }

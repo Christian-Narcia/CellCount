@@ -62,21 +62,26 @@ src/
 │   ├── fileLoader.js      ·  drag-drop + file input → File (per slot, by type)
 │   ├── imageDecoder.js    ·  File → ImageData (TIFF via UTIF, else browser)
 │   ├── channelExtract.js  ·  ImageData → per-channel grayscale matrix
-│   ├── roiParser.js       ·  ImageJ .roi binary → absolute polygon
-│   └── rasterize.js       ·  polygon → binary AOI mask (scanline fill)
+│   ├── roiParser.js       ·  ImageJ .roi binary → absolute polygon (+ rotation)
+│   ├── roiTransform.js    ·  rotate/translate an ROI polygon (pure)
+│   └── rasterize.js       ·  polygon → binary AOI mask (scanline fill) + point test
 │
 ├── ui/
 │   ├── channelInputs.js   ·  R/G/B/Gray + mask slots + per-channel style controls
 │   ├── composite.js       ·  merge channel matrices → display image (styled)
 │   ├── canvasLayers.js    ·  aligned stack: composite · AOI boundary · markers
 │   ├── aoiBoundary.js     ·  trace the mask edge as a dashed outline
+│   ├── roiControls.js     ·  rotate (degrees) + drag-to-move the loaded ROI
+│   ├── manualMarkers.js   ·  click-to-place/remove channel-attributed manual markers
 │   ├── controls.js        ·  slider/toggle panel (generated from config); link
 │   │                          toggle + per-channel R/Dmin/T sliders
-│   ├── overlay.js         ·  marker rendering
+│   ├── overlay.js         ·  marker rendering (fixed-radius dots + co-loc discs)
+│   ├── shortcuts.js       ·  keyboard R/G/B/Y → toggle channel visibility
 │   └── resultsTable.js    ·  "View results" modal (summary + per-cell tables)
 │
 └── export/
-    └── csv.js             ·  Blob-based CSV (summary block + per-cell rows)
+    ├── csv.js             ·  Blob-based CSV (summary block + per-cell rows)
+    └── png.js             ·  flatten the canvas stack → PNG download
 ```
 
 ### Why it's easy to change
@@ -130,8 +135,10 @@ Phases 1–10 (+ 2.5) complete — the multi-channel counter is functionally who
 scaffold, the loading pipeline (separate R/G/B/Gray slots + an ImageJ `.roi` slot,
 per-channel extraction with Gray using luminance, dimension validation), the
 aligned canvas stack (composite → dashed AOI boundary → marker overlay), channel
-compositing (per-channel colour/opacity/visibility + Additive/Opacity blend, all
-pixel-level), **per-channel detection**, and **cross-channel co-localization**.
+compositing (per-channel opacity/visibility + Additive/Opacity blend, all
+pixel-level; each channel's **composite colour is fixed** at its config default and
+the per-channel colour picker controls **marker colour only**), **per-channel
+detection**, and **cross-channel co-localization**.
 
 The AOI is an **ImageJ `.roi` polygon**: a custom binary parser
 (`core/roiParser.js`) reads the format and `core/rasterize.js` fills it (scanline
@@ -143,16 +150,30 @@ threshold reference image-global, so a smaller ROI can only ever *reduce* the co
 (the in-ROI result is a strict subset of the whole-image result) — never raise it.
 A co-localization pass then matches cells across channels within a **Co-R** radius
 (every pair + the full set; **Gray is excluded by default** — set `coloc: true` on
-the Gray channel in `config.js` to include it). The overlay shows per-channel rings plus mixed-colour
-co-localization dots; the panel shows a total plus per-channel and per-combo
+the Gray channel in `config.js` to include it). The overlay shows per-channel dots
+(small, fixed-radius) plus larger mixed-colour
+co-localization discs; the panel shows a total plus per-channel and per-combo
 counts. Display styling and Co-R never re-run detection — counts are stable. CSV
 exports one row per cell tagged with its channel.
 
 **Detection params are per-channel** (Phase 9): a "Link channels" toggle (default
 on) shares one R/Dmin/T set across all channels; unlink it to tune each channel's
 R/Dmin/T independently. The worker merges per-channel overrides onto the shared
-params, and each channel's markers ring at its own R. Threshold mode, fluorescent
-mode, and Co-R remain global.
+params. Threshold mode, fluorescent mode, and Co-R remain global.
+
+**ROI editing** (Phase 11): once an `.roi` loads, a small editor appears to
+**rotate** it (degrees — seeded from the file's stored rotation at header offset
+36) and **reposition** it by toggling "Move ROI" and dragging on the image. Edits
+re-rasterise the mask and re-run detection; the current angle is shown in the ROI
+slot status. An **"Add markers"** tool lets you click the image to place (or click
+a marker to remove) **channel-attributed** manual markers: a channel selector picks
+which channel a new marker belongs to, and a **Reset** clears them all. Each marker
+draws as a small square in its channel's marker colour, hides with that channel, and
+is **folded into that channel's count** everywhere (headline, chips, "View results",
+CSV — exported under its own channel id with `inside_aoi` computed per point). It
+shares the image canvas with the ROI move tool, so only one is active at a time. **Export PNG** flattens the current view (composite
++ AOI boundary + markers) into one image and downloads it. The keys **R / G / B / Y**
+toggle each channel's visibility (simple toggle; ignored while typing in a field).
 
 **Export** (Phase 10): a **"View results"** button opens a modal with the total,
 AOI pixel area, per-channel and per-combination count tables (colour-dotted), and a
@@ -162,4 +183,10 @@ cell with `cell_id, channel, x, y, intensity, inside_aoi, colocalized_with`. The
 `colocalized_with` column is computed symmetrically, so each cell lists every other
 channel it co-localizes with within Co-R.
 
-Next up (`todo.txt`): the test/QA pass (Phase 11).
+The **headline count** (Phase 12) is channel-aware: with one active (loaded +
+visible) channel it shows that channel's own count; with several it shows the
+**overlapping** count — cells co-localized across *all* active channels within Co-R
+(the intersection, not a double-counting sum) — and the label switches to
+"overlapping". Toggling a channel's visibility updates it live, no re-detection.
+
+Next up (`todo.txt`): the test/QA pass (Phase 13).
