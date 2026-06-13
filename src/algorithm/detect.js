@@ -9,7 +9,7 @@
  *            → threshold → NMS
  */
 
-import { DERIVE } from '../config.js';
+import { DERIVE, thresholdScale } from '../config.js';
 import { rgbaToGrayscale } from './grayscale.js';
 import { gaussianBlur } from './gaussian.js';
 import { laplacian } from './laplacian.js';
@@ -20,7 +20,7 @@ import { nonMaxSuppression } from './nms.js';
  * @typedef {Object} DetectParams
  * @property {number} R      - expected cell radius (px)
  * @property {number} Dmin   - minimum separation between cells (px)
- * @property {number} T      - intensity threshold (0–255)
+ * @property {number} T      - threshold: Fiji 0–10 ('log') or absolute 0–255 ('intensity')
  * @property {boolean} fluorescent - bright cells on dark bg → no inversion
  * @property {'log'|'intensity'} [thresholdMode]
  */
@@ -41,7 +41,8 @@ import { nonMaxSuppression } from './nms.js';
  *
  *   WHY NOT zero-out everything outside the ROI before blurring (the obvious
  *   "mask first" approach)? Two bugs:
- *     1. The relative 'log' threshold is `(T/255) × max blob strength`. If the max
+ *     1. The relative 'log' threshold is `(T/10) × max blob strength` (T on the
+ *        Fiji 0–10 scale). If the max
  *        is taken over only the in-ROI content, then drawing a smaller ROI that
  *        excludes the brightest cells LOWERS the bar and detects MORE faint cells
  *        — a smaller region yielding a higher count, which is wrong and confusing.
@@ -83,7 +84,8 @@ export function detectChannel(gray, width, height, params, mask = null) {
   const peaks = findLocalMaxima(log, proc, width, height, nbRadius);
 
   // Step D: threshold (intensity or relative LoG — reference is the global max).
-  let candidates = applyThreshold(peaks, thresholdMode, T);
+  // thresholdScale maps the 'log' Fiji 0–10 value to a 0–1 peak fraction.
+  let candidates = applyThreshold(peaks, thresholdMode, T, thresholdScale(thresholdMode));
   // AOI restriction: keep only cells whose centre is inside the ROI. After the
   // threshold (so the ROI never moves the bar), before NMS (so an out-of-ROI peak
   // can't suppress an in-ROI one).

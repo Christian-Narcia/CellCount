@@ -6,9 +6,15 @@
  * markers. Each marker belongs to a SPECIFIC channel (same ids as CHANNELS config),
  * so it counts toward that channel's total and is exported as that channel — exactly
  * as if it were a detected cell. While the tool is active the supplied canvas
- * captures pointer events: a click on empty space ADDS a marker (to the selected
- * channel); a click near ANY existing manual marker REMOVES it. main.js reads
- * getChannelMarkers()/count() to draw, count, and export them.
+ * captures pointer events. A click resolves in priority order:
+ *   1. near a hand-placed marker (any channel) → REMOVE it (own list);
+ *   2. near an AUTO-DETECTED marker            → EXCLUDE it (the caller owns the
+ *      detected results + the exclusion set, injected via getDetectedMarkers /
+ *      onExcludeDetected — this tool stays agnostic about how detection works);
+ *   3. empty space                             → ADD a marker for the selected channel.
+ * So the one edit mode both adds/removes manual markers and prunes spurious
+ * auto-detections. main.js reads getChannelMarkers()/count() to draw, count,
+ * and export the manual markers.
  *
  * Coordinates: a click's screen position is converted to image pixels via the
  * canvas's on-screen rect (which already includes the viewport's pan/zoom
@@ -28,9 +34,26 @@ const DRAG_PX = 4; // movement above this is treated as a drag, not a click
  * @param {HTMLCanvasElement} deps.canvas - overlay canvas (event target + coord source)
  * @param {Array<{key:string,label:string}>} deps.channels - attributable channels (CHANNELS)
  * @param {() => void} [deps.onActivate] - called when this tool turns ON
- * @param {() => void} [deps.onChange] - called when a marker is added/removed/reset
+ * @param {() => void} [deps.onChange] - called when a MANUAL marker is added/removed
+ * @param {(activeChannel: string|null) => Record<string, Array<{x:number,y:number,index:number}>>} [deps.getDetectedMarkers]
+ *        - AUTO-DETECTED markers eligible to be excluded, each with its ORIGINAL
+ *          index. Receives the currently-selected channel so the caller can restrict
+ *          exclusion to it (you can only prune detections of the channel you're
+ *          editing, never another channel's even if it's visible).
+ * @param {(channelKey: string, index: number) => void} [deps.onExcludeDetected]
+ *        - called to exclude the auto-detected marker at `index` in `channelKey`.
+ * @param {() => void} [deps.onReset] - called when "Reset" is clicked (after the
+ *        manual lists are cleared) so the caller can clear its exclusions + refresh.
  */
-export function createManualMarkers(container, { canvas, channels, onActivate = () => {}, onChange = () => {} }) {
+export function createManualMarkers(container, {
+  canvas,
+  channels,
+  onActivate = () => {},
+  onChange = () => {},
+  getDetectedMarkers = () => ({}),
+  onExcludeDetected = () => {},
+  onReset = () => {},
+}) {
   /** Per-channel marker lists, keyed by channel id. @type {Record<string, Array<{x:number,y:number}>>} */
   const markers = Object.fromEntries(channels.map((c) => [c.key, []]));
   let activeChannel = channels[0] ? channels[0].key : null;
@@ -61,11 +84,13 @@ export function createManualMarkers(container, { canvas, channels, onActivate = 
   const reset = el('button', 'manual-tools__reset btn-secondary');
   reset.type = 'button';
   reset.textContent = 'Reset';
-  reset.title = 'Remove all manually placed markers (every channel)';
+  reset.title = 'Remove all manual markers and restore every excluded auto-detection';
   reset.addEventListener('click', () => {
-    if (total() === 0) return;
+    // Clears BOTH hand-placed markers and the caller's auto-detection exclusions,
+    // so one button undoes every marker edit. onReset() does the caller-side clear
+    // + refresh, so we don't also fire onChange (which would double-repaint).
     for (const key of Object.keys(markers)) markers[key].length = 0;
-    onChange();
+    onReset();
   });
 
   row.append(select, reset);
@@ -103,10 +128,25 @@ export function createManualMarkers(container, { canvas, channels, onActivate = 
     if (Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX) return; // a drag
     const { x, y, sx } = toImage(e);
     const tol = HIT_PX * sx; // screen tolerance → image px
-    const hit = nearest(x, y, tol); // remove the nearest marker in ANY channel
-    if (hit) markers[hit.key].splice(hit.index, 1);
-    else if (activeChannel) markers[activeChannel].push({ x: Math.round(x), y: Math.round(y) });
-    onChange();
+
+    // 1. A hand-placed marker (any channel) under the cursor → remove it.
+    const manualHit = nearest(x, y, tol);
+    if (manualHit) {
+      markers[manualHit.key].splice(manualHit.index, 1);
+      onChange();
+      return;
+    }
+    // 2. An auto-detected marker under the cursor → exclude it (caller-owned).
+    const detHit = nearestDetected(x, y, tol);
+    if (detHit) {
+      onExcludeDetected(detHit.key, detHit.index);
+      return;
+    }
+    // 3. Empty space → add a new marker for the selected channel.
+    if (activeChannel) {
+      markers[activeChannel].push({ x: Math.round(x), y: Math.round(y) });
+      onChange();
+    }
   });
 
   /** Nearest manual marker (across all channels) within `tol` image px, or null. */
@@ -120,6 +160,28 @@ export function createManualMarkers(container, { canvas, channels, onActivate = 
         if (d <= bestD) {
           bestD = d;
           best = { key, index: i };
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Nearest AUTO-DETECTED marker within `tol` image px, or null. The candidate set
+   * + ORIGINAL indices come from the caller (getDetectedMarkers), scoped to the
+   * SELECTED channel and already excluding hidden/previously-excluded cells — so we
+   * never exclude another channel's (or an invisible) marker. Returns { key, index }.
+   */
+  function nearestDetected(x, y, tol) {
+    const detected = getDetectedMarkers(activeChannel) || {};
+    let best = null;
+    let bestD = tol;
+    for (const key of Object.keys(detected)) {
+      for (const m of detected[key]) {
+        const d = Math.hypot(m.x - x, m.y - y);
+        if (d <= bestD) {
+          bestD = d;
+          best = { key, index: m.index };
         }
       }
     }

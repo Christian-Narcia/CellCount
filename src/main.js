@@ -21,7 +21,7 @@
  *                 across channels is the next phase.
  */
 
-import { DEFAULT_PARAMS, CHANNELS, ROI_INPUT } from './config.js';
+import { DEFAULT_PARAMS, CHANNELS, ROI_INPUT, APP_VERSION } from './config.js';
 import { decodeFile } from './core/imageDecoder.js';
 import { colocalize, colocalizationByCell, colocalizeAll } from './algorithm/colocalize.js';
 import { extractChannel, maskCoverage, sameSize } from './core/channelExtract.js';
@@ -31,6 +31,7 @@ import { transformPolygon, polygonCenter } from './core/roiTransform.js';
 import { initChannelInputs } from './ui/channelInputs.js';
 import { createRoiControls } from './ui/roiControls.js';
 import { createManualMarkers } from './ui/manualMarkers.js';
+import { createMarkerStyle } from './ui/markerStyle.js';
 import { buildComposite } from './ui/composite.js';
 import { createCanvasLayers } from './ui/canvasLayers.js';
 import { drawAoiBoundary } from './ui/aoiBoundary.js';
@@ -47,6 +48,7 @@ const el = {
   channelInputs: document.getElementById('channel-inputs'),
   roiControls: document.getElementById('roi-controls'),
   manualTools: document.getElementById('manual-tools'),
+  markerTools: document.getElementById('marker-tools'),
   placeholder: document.getElementById('stage-placeholder'),
   baseCanvas: document.getElementById('base-canvas'),
   aoiCanvas: document.getElementById('aoi-canvas'),
@@ -59,6 +61,7 @@ const el = {
   exportBtn: document.getElementById('export-btn'),
   exportPngBtn: document.getElementById('export-png-btn'),
   viewBtn: document.getElementById('view-btn'),
+  appVersion: document.getElementById('app-version'),
   stage: document.getElementById('stage'),
   canvasWrap: document.getElementById('canvas-wrap'),
   zoomToolbar: document.getElementById('zoom-toolbar'),
@@ -108,10 +111,24 @@ const manualMarkers = createManualMarkers(el.manualTools, {
   channels: CHANNELS,
   onActivate: () => roiControls.deactivate(),
   onChange: () => {
+    // Manual markers participate in co-localization (effectiveResults), so a
+    // placement/removal must refresh the combos too — not just the markers/counts.
+    recolocalize();
     renderMarkers();
     updateCounts();
     updateResultAvailability();
   },
+  // Detected markers eligible to be excluded — scoped to the SELECTED channel,
+  // each with its ORIGINAL lastResults index, plus the exclude/reset hooks.
+  getDetectedMarkers: (activeKey) => excludableDetectedMarkers(activeKey),
+  onExcludeDetected: (key, index) => excludeDetected(key, index),
+  onReset: () => resetMarkerEdits(),
+});
+
+// Per-channel marker SHAPE toggle (dots vs rings). Display-only: a change just
+// repaints the overlay (no re-detection), same path as a colour change.
+const markerStyle = createMarkerStyle(el.markerTools, {
+  onChange: () => renderMarkers(),
 });
 
 /** Loaded inputs. dims is the shared {width,height}; null until first load. */
@@ -122,6 +139,12 @@ let dims = null;            // { width, height } — set by the first CHANNEL im
 let lastResults = {};       // { r: cells[], g: cells[], ... } from the worker
 let lastColoc = {};         // { 'r+g': cells[], ... } from the coloc pass
 const colocDotsOn = new Set(); // combo keys whose dots the user has switched on (default: all off)
+// Auto-detected cells the user has manually excluded (Phase 11), keyed by channel
+// → Set of indices into that channel's lastResults array. Excluded cells are NOT
+// removed from lastResults (re-detection would restore them); instead every read
+// site filters them out (includedFor/includedResults). Cleared on every re-detect,
+// since new results replace the arrays and old indices are meaningless.
+const excludedCells = Object.fromEntries(CHANNELS.map((c) => [c.key, new Set()]));
 let busy = false;           // a detection is in flight
 let queued = false;         // a newer detection request arrived while busy
 let lastDetectSig = null;   // signature of the last dispatched detection (see below)
@@ -336,6 +359,7 @@ function resetStage() {
   manualMarkers.clear();
   lastResults = {};
   lastColoc = {};
+  for (const c of CHANNELS) excludedCells[c.key].clear();
   lastDetectSig = null;
   layers.clearOverlay();
   layers.clearAoi();
@@ -414,6 +438,8 @@ worker.onmessage = (e) => {
     setStatus(`Detection error: ${data.error}`, true);
   } else {
     lastResults = data.perChannel;
+    // New arrays replace the old ones, so prior exclusion indices are meaningless.
+    for (const c of CHANNELS) excludedCells[c.key].clear();
     recolocalize();
     renderMarkers();
     updateCounts();
@@ -428,9 +454,106 @@ worker.onmessage = (e) => {
   }
 };
 
-/** Recompute co-localization combos from the current per-channel results + Co-R. */
+/**
+ * One channel's detected cells with the user-excluded ones removed (Phase 11). The
+ * single chokepoint every read site (markers, counts, coloc, report, CSV) funnels
+ * through, so an excluded cell vanishes everywhere consistently. Returns the live
+ * array untouched when nothing is excluded (the common case — no copy).
+ */
+function includedFor(key) {
+  const list = lastResults[key];
+  if (!list) return [];
+  const ex = excludedCells[key];
+  return ex && ex.size ? list.filter((_, i) => !ex.has(i)) : list;
+}
+
+/** All channels' detected cells, exclusions removed — the per-channel map for coloc/report/CSV. */
+function includedResults() {
+  const out = {};
+  for (const c of CHANNELS) if (lastResults[c.key]) out[c.key] = includedFor(c.key);
+  return out;
+}
+
+/**
+ * Detected markers the manual-edit tool may exclude — restricted to the SELECTED
+ * channel (`activeKey`): you can only prune detections of the channel you're
+ * editing, never another channel's even if it's visible. Returns only its
+ * not-yet-excluded cells, each carrying its ORIGINAL lastResults index. Empty when
+ * the selected channel is unloaded or hidden (its markers aren't drawn → not clickable).
+ */
+function excludableDetectedMarkers(activeKey) {
+  if (!activeKey) return {};
+  const { styles } = inputs.getCompositeSettings();
+  const visible = !styles[activeKey] || styles[activeKey].visible;
+  const list = lastResults[activeKey];
+  if (!list || !list.length || !visible) return {};
+  const ex = excludedCells[activeKey];
+  const arr = [];
+  for (let i = 0; i < list.length; i++) {
+    if (ex && ex.has(i)) continue;
+    arr.push({ x: list[i].x, y: list[i].y, index: i });
+  }
+  return { [activeKey]: arr };
+}
+
+/** Exclude one auto-detected cell, then refresh everything that reads detections. */
+function excludeDetected(key, index) {
+  if (!excludedCells[key]) return;
+  excludedCells[key].add(index);
+  recolocalize(); // excluded cells must not participate in co-localization
+  renderMarkers();
+  updateCounts();
+  updateResultAvailability();
+}
+
+/** "Reset" in the manual tool: clear every exclusion (manual lists already cleared) + refresh. */
+function resetMarkerEdits() {
+  for (const c of CHANNELS) excludedCells[c.key].clear();
+  recolocalize();
+  renderMarkers();
+  updateCounts();
+  updateResultAvailability();
+}
+
+/**
+ * Per-channel EFFECTIVE cells = detected (exclusions removed) PLUS the channel's
+ * hand-placed manual markers, each tagged. This is the canonical cell set for
+ * co-localization AND reporting: a manual marker behaves exactly like a detected
+ * cell — it can co-localize, so it feeds the overlapping headline, the combo chips,
+ * the results modal, and the CSV (matching the "as if it were a detected cell"
+ * contract). Each cell: { x, y, intensity:number|null, manual:bool, inside:bool }.
+ * Detected cells are inside the AOI by construction; manual ones are tested per point.
+ */
+function effectiveResults() {
+  const manualByChannel = manualMarkers.getChannelMarkers();
+  const out = {};
+  for (const c of CHANNELS) {
+    const hasDetected = Boolean(lastResults[c.key]);
+    const manual = manualByChannel[c.key] || [];
+    if (!hasDetected && !manual.length) continue;
+    const list = [];
+    if (hasDetected) {
+      for (const cell of includedFor(c.key)) {
+        list.push({ x: cell.x, y: cell.y, intensity: cell.intensity, manual: false, inside: true });
+      }
+    }
+    for (const m of manual) {
+      list.push({
+        x: m.x,
+        y: m.y,
+        intensity: null,
+        manual: true,
+        inside: dims ? maskContains(maskMatrix, dims.width, dims.height, m.x, m.y) : true,
+      });
+    }
+    out[c.key] = list;
+  }
+  return out;
+}
+
+/** Recompute co-localization combos from the EFFECTIVE results (manual markers included) + Co-R. */
 function recolocalize() {
-  lastColoc = colocalize(lastResults, COLOC_KEYS, controls.getParams().coR);
+  lastColoc = colocalize(effectiveResults(), COLOC_KEYS, controls.getParams().coR);
 }
 
 /**
@@ -445,11 +568,20 @@ function renderMarkers() {
   const colorOf = (key) => (styles[key] && styles[key].color) || colorFromConfig(key);
 
   const groups = [];
-  // Per-channel cells — small fixed-radius dots in the channel colour (Phase 11).
+  // Per-channel cells — dots or rings (user toggle, Phase 11), with user-excluded
+  // cells filtered out. Rings draw at the channel's OWN resolved R, so each group
+  // carries its radius.
+  const shape = markerStyle.getStyle();
   for (const c of CHANNELS) {
-    const cells = lastResults[c.key];
-    if (!cells || !cells.length || !visible(c.key)) continue;
-    groups.push({ cells, color: colorOf(c.key), kind: 'cell' });
+    const cells = includedFor(c.key);
+    if (!cells.length || !visible(c.key)) continue;
+    groups.push({
+      cells,
+      color: colorOf(c.key),
+      kind: 'cell',
+      markerStyle: shape,
+      radius: controls.getChannelParams(c.key).R,
+    });
   }
   // Co-localization dots on top: OFF by default — only drawn for combos the user
   // has switched on (click its chip) and whose member channels are all visible.
@@ -463,11 +595,18 @@ function renderMarkers() {
   }
   // Hand-placed markers on top — one group per channel, drawn as squares in that
   // channel's marker colour and hidden when the channel is hidden (same as its dots).
+  // Labels continue that channel's detected sequence (detected 1…N → manual N+1…).
   const manualByChannel = manualMarkers.getChannelMarkers();
   for (const c of CHANNELS) {
     const list = manualByChannel[c.key];
     if (!list || !list.length || !visible(c.key)) continue;
-    groups.push({ cells: list, color: colorOf(c.key), kind: 'manual' });
+    groups.push({
+      cells: list,
+      color: colorOf(c.key),
+      kind: 'manual',
+      markerStyle: shape, // hollow square in rings mode, filled in dots mode
+      labelStart: includedFor(c.key).length + 1,
+    });
   }
   drawMarkerGroups(layers.overlayCtx, groups, controls.getParams().R);
 }
@@ -488,9 +627,11 @@ function headlineCount() {
   if (active.length === 0) return 0;
   if (active.length === 1) {
     const k = active[0];
-    return (lastResults[k] ? lastResults[k].length : 0) + manualMarkers.count(k);
+    return includedFor(k).length + manualMarkers.count(k);
   }
-  return colocalizeAll(lastResults, active, controls.getParams().coR);
+  // ≥2 active: overlap across all active channels — manual markers participate as
+  // cells (effectiveResults), so hand-placed markers move the overlapping number.
+  return colocalizeAll(effectiveResults(), active, controls.getParams().coR);
 }
 
 /** Loaded AND visible channel keys, in declaration order ("active" channels). */
@@ -512,7 +653,7 @@ function updateCounts() {
   const colorOf = (key) => (styles[key] && styles[key].color) || colorFromConfig(key);
   const parts = [];
   for (const c of CHANNELS) {
-    const detected = lastResults[c.key] ? lastResults[c.key].length : 0;
+    const detected = includedFor(c.key).length; // excluded cells removed
     const manual = manualMarkers.count(c.key);
     if (!lastResults[c.key] && !manual) continue; // nothing loaded/placed for this channel
     parts.push(chip(colorOf(c.key), c.key.toUpperCase(), detected + manual));
@@ -541,7 +682,7 @@ const chip = (color, label, n) =>
 const comboChip = (color, label, n, combo, on) =>
   `<span class="count-chip count-chip--combo${on ? ' is-on' : ''}" data-combo="${combo}" title="Show/hide ${label} dots">` +
   `<span class="count-chip__dot" style="background:${color}"></span>${label} ${n}</span>`;
-const totalCells = () => CHANNELS.reduce((sum, c) => sum + (lastResults[c.key] ? lastResults[c.key].length : 0), 0);
+const totalCells = () => CHANNELS.reduce((sum, c) => sum + includedFor(c.key).length, 0);
 const colorFromConfig = (key) => (CHANNELS.find((c) => c.key === key) || {}).defaultColor || '#ffffff';
 
 /** Additive mix of hex colours, clamped — the marker colour for a co-loc combo. */
@@ -573,13 +714,15 @@ el.zoomPct.addEventListener('click', () => viewport.zoomTo(1)); // 1:1
 el.exportBtn.addEventListener('click', () => {
   if (!totalCells() && !manualCount()) return;
   const { styles } = inputs.getCompositeSettings();
-  downloadCsv(lastResults, {
+  // Export the EFFECTIVE results (detected minus exclusions, plus manual markers):
+  // dropped cells never appear, and manual markers export as their own channel with
+  // co-localization computed like any cell.
+  downloadCsv(effectiveResults(), {
     coloc: lastColoc,
     colocKeys: COLOC_KEYS,
     coR: controls.getParams().coR,
     styles,
     aoiArea: aoiPixelArea(),
-    manual: manualReportRows(),
   });
 });
 
@@ -588,24 +731,6 @@ el.exportPngBtn.addEventListener('click', () => {
   if (!dims) return;
   downloadPng([layers.baseCanvas, layers.aoiCanvas, layers.overlayCanvas]);
 });
-
-/** Manual markers flattened with their channel + AOI membership, for export. */
-function manualReportRows() {
-  if (!dims) return [];
-  const byChannel = manualMarkers.getChannelMarkers();
-  const rows = [];
-  for (const c of CHANNELS) {
-    for (const m of byChannel[c.key] || []) {
-      rows.push({
-        channel: c.key,
-        x: m.x,
-        y: m.y,
-        inside: maskContains(maskMatrix, dims.width, dims.height, m.x, m.y),
-      });
-    }
-  }
-  return rows;
-}
 
 /** AOI area in pixels: the mask's inside-count, or the whole image when no ROI. */
 function aoiPixelArea() {
@@ -642,16 +767,16 @@ function buildReport() {
   const { styles } = inputs.getCompositeSettings();
   const colorOf = (key) => (styles[key] && styles[key].color) || colorFromConfig(key);
   const coR = controls.getParams().coR;
-  const byCell = colocalizationByCell(lastResults, COLOC_KEYS, coR);
+  // Detected + manual, merged: manual markers count and co-localize like detections.
+  const effective = effectiveResults();
+  const byCell = colocalizationByCell(effective, COLOC_KEYS, coR);
 
-  const manualByChannel = manualMarkers.getChannelMarkers();
   const channels = [];
   for (const c of CHANNELS) {
-    const detected = lastResults[c.key] ? lastResults[c.key].length : 0;
     const manual = manualMarkers.count(c.key);
     if (!lastResults[c.key] && !manual) continue;
-    // Manual markers are folded into the channel's count (Phase 11).
-    channels.push({ key: c.key, label: c.key.toUpperCase(), color: colorOf(c.key), count: detected + manual });
+    const count = effective[c.key] ? effective[c.key].length : 0;
+    channels.push({ key: c.key, label: c.key.toUpperCase(), color: colorOf(c.key), count });
   }
 
   const combos = [];
@@ -665,10 +790,12 @@ function buildReport() {
     });
   }
 
+  // One row per effective cell (detected + manual interleaved per channel); manual
+  // cells have a blank intensity but otherwise report their co-localization like any cell.
   const cells = [];
   let id = 1;
   for (const c of CHANNELS) {
-    const list = lastResults[c.key];
+    const list = effective[c.key];
     if (!list) continue;
     const cc = byCell[c.key] || [];
     list.forEach((cell, i) => {
@@ -677,16 +804,10 @@ function buildReport() {
         channel: c.key,
         x: cell.x,
         y: cell.y,
-        intensity: Math.round(cell.intensity),
+        intensity: cell.manual ? '' : Math.round(cell.intensity),
         colocalizedWith: (cc[i] || []).join('+'),
       });
     });
-  }
-  // Manual markers — no intensity / co-localization; tagged with their channel.
-  for (const c of CHANNELS) {
-    for (const m of manualByChannel[c.key] || []) {
-      cells.push({ id: id++, channel: c.key, x: m.x, y: m.y, intensity: '', colocalizedWith: '' });
-    }
   }
 
   return { total: totalCells() + manualCount(), aoiArea: aoiPixelArea(), channels, combos, cells };
@@ -698,5 +819,6 @@ function setStatus(message, isError = false) {
   el.status.classList.toggle('is-error', isError);
 }
 
+if (el.appVersion) el.appVersion.textContent = `Version ${APP_VERSION}`;
 setStatus('Load one or more channels to begin.');
-console.info('ITCN Cell Counter ready. Default params:', DEFAULT_PARAMS);
+console.info(`ITCN Cell Counter v${APP_VERSION} ready. Default params:`, DEFAULT_PARAMS);

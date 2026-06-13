@@ -24,7 +24,7 @@
  *   • linked        — boolean.
  */
 
-import { SLIDERS, SELECTS, TOGGLES, DEFAULT_PARAMS, CHANNELS, LINK_DEFAULT } from '../config.js';
+import { SLIDERS, SELECTS, TOGGLES, DEFAULT_PARAMS, CHANNELS, LINK_DEFAULT, thresholdRange } from '../config.js';
 
 /** Sliders that support independent per-channel values. */
 const PER_CHANNEL_SLIDERS = SLIDERS.filter((s) => s.perChannel);
@@ -154,7 +154,13 @@ export function initControls(container, onChange) {
       select.appendChild(o);
     }
     select.addEventListener('change', () => {
+      const prev = params[def.key];
       params[def.key] = select.value;
+      // The threshold mode redefines what T means (relative 0–1 vs absolute
+      // 0–255), so re-range every T slider and rescale its value to match.
+      if (def.reranges === 'T' && select.value !== prev) {
+        rerangeThreshold(prev, select.value);
+      }
       emit();
     });
 
@@ -176,6 +182,30 @@ export function initControls(container, onChange) {
     label.append(input, document.createTextNode(` ${def.label}`));
     wrap.appendChild(label);
     container.appendChild(wrap);
+  }
+
+  /**
+   * Re-range every T slider (shared + per-channel) when the threshold mode
+   * changes, rescaling each current value to the SAME relative position in the
+   * new range so the knob never jumps to an extreme. Mutates `params.T` and the
+   * per-channel `channelParams[*].T` so the next emit() ships consistent values.
+   */
+  function rerangeThreshold(fromMode, toMode) {
+    const from = thresholdRange(fromMode);
+    const to = thresholdRange(toMode);
+
+    const newShared = rescaleToRange(params.T, from, to);
+    params.T = newShared;
+    const sharedT = sharedPerChannelWidgets.T;
+    if (sharedT) applySliderRange(sharedT, to, newShared);
+
+    for (const c of CHANNELS) {
+      if (!channelParams[c.key] || !('T' in channelParams[c.key])) continue;
+      const v = rescaleToRange(channelParams[c.key].T, from, to);
+      channelParams[c.key].T = v;
+      const w = chWidgets[c.key] && chWidgets[c.key].T;
+      if (w) applySliderRange(w, to, v);
+    }
   }
 
   /** Show the shared per-channel sliders xor the per-channel groups. */
@@ -234,6 +264,30 @@ function buildSlider(def, initial, onInput) {
   });
 
   return { label, input, value };
+}
+
+/**
+ * Push a new range + value onto an existing slider widget (used when the
+ * threshold mode swaps the T slider between its 0–1 and 0–255 scales).
+ */
+function applySliderRange(widget, range, value) {
+  widget.input.min = range.min;
+  widget.input.max = range.max;
+  widget.input.step = range.step;
+  widget.input.value = value;
+  widget.value.textContent = `${value}${range.unit || ''}`;
+}
+
+/**
+ * Map a value's relative position in `from` onto `to`, snapped to `to.step` and
+ * clamped. The toFixed tidies float drift from the step multiplication (so e.g.
+ * 0.30000000000000004 reads as 0.3).
+ */
+function rescaleToRange(v, from, to) {
+  const frac = from.max > from.min ? (v - from.min) / (from.max - from.min) : 0;
+  const snapped = Math.round((to.min + frac * (to.max - to.min)) / to.step) * to.step;
+  const clamped = Math.min(to.max, Math.max(to.min, snapped));
+  return Number(clamped.toFixed(4));
 }
 
 /** Tiny element helper. */

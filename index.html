@@ -10,8 +10,16 @@
   </head>
   <body>
     <header class="app-header">
-      <h1>ITCN Cell Counter</h1>
-      <p class="subtitle">100% in-browser · nothing is uploaded</p>
+      <div class="app-header__titles">
+        <h1>ITCN Cell Counter</h1>
+        <p class="subtitle">100% in-browser · nothing is uploaded</p>
+      </div>
+      <!-- Marker tools live in the title bar so they're always reachable without
+           scrolling the control panel. Injected by manualMarkers.js / markerStyle.js. -->
+      <div class="app-header__tools">
+        <div id="manual-tools" class="manual-tools"><!-- "Add markers" toggle injected by manualMarkers.js --></div>
+        <div id="marker-tools" class="marker-tools"><!-- "Marker style" toggle injected by markerStyle.js --></div>
+      </div>
     </header>
 
     <main class="app">
@@ -26,7 +34,6 @@
         <section id="controls" class="panel__section"><!-- sliders injected by controls.js --></section>
 
         <section class="panel__section results">
-          <div id="manual-tools" class="manual-tools"><!-- "Add markers" toggle injected by manualMarkers.js --></div>
           <div class="results__count">
             <span id="cell-count">0</span>
             <span id="cell-count-label" class="results__label">cells</span>
@@ -39,7 +46,11 @@
           </div>
         </section>
 
-        <p id="status" class="status"></p>
+        <!-- Pinned to the bottom of the panel: status line + tool version. -->
+        <div class="panel__footer">
+          <p id="status" class="status"></p>
+          <p id="app-version" class="app-version"><!-- set from config APP_VERSION --></p>
+        </div>
       </aside>
 
       <!-- Right: image stage -->

@@ -73,9 +73,10 @@ src/
 │   ├── aoiBoundary.js     ·  trace the mask edge as a dashed outline
 │   ├── roiControls.js     ·  rotate (degrees) + drag-to-move the loaded ROI
 │   ├── manualMarkers.js   ·  click-to-place/remove channel-attributed manual markers
+│   ├── markerStyle.js     ·  display-only dots/rings toggle for per-channel markers
 │   ├── controls.js        ·  slider/toggle panel (generated from config); link
 │   │                          toggle + per-channel R/Dmin/T sliders
-│   ├── overlay.js         ·  marker rendering (fixed-radius dots + co-loc discs)
+│   ├── overlay.js         ·  marker rendering (dots or rings + co-loc discs)
 │   ├── shortcuts.js       ·  keyboard R/G/B/Y → toggle channel visibility
 │   └── resultsTable.js    ·  "View results" modal (summary + per-cell tables)
 │
@@ -103,7 +104,7 @@ src/
 | ------ | ------------------------------------ | ------- |
 | `R`    | expected cell radius (px)            | 10      |
 | `Dmin` | minimum separation between cells (px)| 20      |
-| `T`    | threshold (0–255, see modes below)   | 30      |
+| `T`    | threshold — range depends on mode (see below) | 2.0 |
 | threshold mode | `log` or `intensity`         | log     |
 | fluorescent | bright cells on dark background | **on**  |
 
@@ -122,12 +123,25 @@ src/
 
 ### Threshold modes
 
-- **`log`** (default) — `T` is a *relative* sensitivity (0–255 → 0–100% of the
-  strongest blob response in the image). This matches how the real ITCN plugin
-  thresholds and is robust to illumination gradients.
-- **`intensity`** — `T` is an absolute pixel value (0–255); a candidate is kept
+`T` means a different thing in each mode, so the **T slider re-ranges itself when
+you switch modes** (and rescales the current value to the same relative knob
+position so it never jumps):
+
+- **`log`** (default) — `T` is a *relative* LoG-strength threshold on the
+  **Fiji/ImageJ ITCN `0.0–10.0`** decimal scale, so it reads identically to the
+  ITCN plugin field. Internally `T / 10` is the fraction of the strongest LoG blob
+  response a candidate must reach (e.g. `2.0` keeps peaks ≥ 20% of the peak
+  strength). Robust to illumination gradients and **independent of bit depth**.
+- **`intensity`** — `T` is an absolute pixel value **0–255**; a candidate is kept
   if its (inverted) intensity ≥ `T`. Intuitive, but sensitive to uneven
   illumination.
+
+> **Why not 0–65535 for 16-bit images?** The decoder runs every TIFF through
+> `UTIF.toRGBA8()`, which normalises 16-bit data down to the 0–255 display range
+> before detection ever sees it — so the absolute mode's 0–255 range is correct
+> for any source bit depth, and the relative `log` mode is bit-depth agnostic by
+> construction. (An earlier build wrongly used a single 0–255 slider for `log`
+> and faked the fraction with a `T/255` division — now removed.)
 
 ## Status
 
@@ -165,13 +179,29 @@ params. Threshold mode, fluorescent mode, and Co-R remain global.
 **rotate** it (degrees — seeded from the file's stored rotation at header offset
 36) and **reposition** it by toggling "Move ROI" and dragging on the image. Edits
 re-rasterise the mask and re-run detection; the current angle is shown in the ROI
-slot status. An **"Add markers"** tool lets you click the image to place (or click
-a marker to remove) **channel-attributed** manual markers: a channel selector picks
-which channel a new marker belongs to, and a **Reset** clears them all. Each marker
-draws as a small square in its channel's marker colour, hides with that channel, and
-is **folded into that channel's count** everywhere (headline, chips, "View results",
-CSV — exported under its own channel id with `inside_aoi` computed per point). It
-shares the image canvas with the ROI move tool, so only one is active at a time. **Export PNG** flattens the current view (composite
+slot status. The marker tools (**"Add markers"** and **"Marker style"**) live in the
+**title bar** so they're always reachable without scrolling the control panel, and the
+tool version (from `APP_VERSION` in `config.js`) is pinned at the bottom of the panel.
+An **"Add markers"** tool turns the image into an edit surface where a
+click resolves in priority order: near a **hand-placed marker** → remove it; near an
+**auto-detected marker of the SELECTED channel** → exclude it (it disappears from the
+overlay, chips, headline, "View results", and CSV as if never detected — no
+re-detection, a pure filter; you can only prune the channel you're editing, never
+another layer's even when it's visible); empty space → place a new
+**channel-attributed** marker. A channel selector picks which channel a new marker
+belongs to, and **Reset** clears all manual markers *and* restores every excluded
+auto-detection in one click. Each manual marker draws as a small numbered square in
+its channel's marker colour (labels continue that channel's detected sequence) and
+hides with that channel. Manual markers behave **exactly like detected cells**: they
+are folded into that channel's count *and co-localize* — so a hand-placed marker
+moves the overlapping headline, the combo chips, the "View results" modal, and the
+CSV (exported under its own channel id, blank intensity, `inside_aoi` per point). It
+shares the image canvas with the ROI move tool, so only one is active at a time. A
+**"Marker style"** toggle switches the per-channel detection markers between
+**dots** (fixed-radius filled dots, the default) and **rings** (unfilled circles at
+each channel's detected R) — a display-only repaint that never re-runs detection.
+Manual squares follow the toggle too (filled in dots mode, hollow in rings mode) so
+they stay distinct from the detection look; co-loc discs are unaffected. **Export PNG** flattens the current view (composite
 + AOI boundary + markers) into one image and downloads it. The keys **R / G / B / Y**
 toggle each channel's visibility (simple toggle; ignored while typing in a field).
 

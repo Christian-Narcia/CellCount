@@ -19,21 +19,49 @@ body {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
+  /* Column layout so the header can grow (it now holds the marker toolbar) without
+     a brittle fixed-height calc on .app — .app just takes the remaining space. */
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
 
 .app-header {
-  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--panel-border);
 }
 .app-header h1 { margin: 0; font-size: 1.25rem; }
 .subtitle { margin: 2px 0 0; color: var(--text-dim); font-size: 0.85rem; }
+
+/* Marker toolbar in the title bar (Add markers + Marker style), laid out as one
+   horizontal row so it stays compact and out of the scrolling control panel. */
+.app-header__tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.app-header__tools .manual-tools,
+.app-header__tools .marker-tools { margin: 0; }
+.app-header__tools .manual-tools { display: flex; align-items: center; gap: 8px; }
+.app-header__tools .manual-tools__btn { width: auto; }
+.app-header__tools .manual-tools__row { margin-top: 0; }
+.app-header__tools .marker-tools .control { flex-direction: row; align-items: center; gap: 8px; }
+.app-header__tools .marker-tools .control label { color: var(--text-dim); white-space: nowrap; }
+.app-header__tools .marker-tools .control select { width: auto; }
 
 .app {
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 16px;
   padding: 16px;
-  height: calc(100vh - 70px);
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---- Control panel ---- */
@@ -186,6 +214,9 @@ body {
   font-size: 0.85rem;
 }
 .manual-tools__reset { flex: none; }
+
+/* Marker-style tool (Phase 11) — "Marker style" dots/rings toggle (display-only). */
+.marker-tools { margin-bottom: 10px; }
 
 .control { display: flex; flex-direction: column; gap: 6px; }
 .control label {
@@ -368,6 +399,11 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   vertical-align: middle;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
+
+/* Panel footer — pinned to the very bottom of the control panel (margin-top:auto
+   in the flex column), holding the status line and the tool version below it. */
+.panel__footer { margin-top: auto; display: flex; flex-direction: column; gap: 6px; }
+.app-version { margin: 0; font-size: 0.72rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 .status { font-size: 0.8rem; color: var(--text-dim); min-height: 1.2em; margin: 0; }
 .status.is-error { color: var(--error); }
