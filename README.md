@@ -8,6 +8,8 @@ ImageJ plugin.
 
 **Nothing is uploaded.** All decoding and computation happens in your browser;
 the heavy math runs in a Web Worker so the UI stays responsive.
+## Hosted Cite on Github
+https://christian-narcia.github.io/CellCount/
 
 ## Run locally
 
@@ -85,16 +87,6 @@ src/
     └── png.js             ·  flatten the canvas stack → PNG download
 ```
 
-### Why it's easy to change
-
-- **New parameter?** Add one entry to `SLIDERS` in `config.js`; the panel and
-  message protocol pick it up automatically. Add `perChannel: true` and it also
-  gains an independent per-channel slider under the "Link channels" toggle.
-- **Swap the algorithm?** `detect.js` is the only file the worker calls. Replace
-  its internals (or import OpenCV.js) without touching UI or loading code.
-- **Different marker look?** Edit `MARKER_STYLE` in `config.js`.
-- **Testable core.** Everything in `algorithm/` is pure and importable in Node,
-  so detection can be unit-tested without a browser.
 
 ## Detection pipeline
 
@@ -135,88 +127,3 @@ position so it never jumps):
 - **`intensity`** — `T` is an absolute pixel value **0–255**; a candidate is kept
   if its (inverted) intensity ≥ `T`. Intuitive, but sensitive to uneven
   illumination.
-
-> **Why not 0–65535 for 16-bit images?** The decoder runs every TIFF through
-> `UTIF.toRGBA8()`, which normalises 16-bit data down to the 0–255 display range
-> before detection ever sees it — so the absolute mode's 0–255 range is correct
-> for any source bit depth, and the relative `log` mode is bit-depth agnostic by
-> construction. (An earlier build wrongly used a single 0–255 slider for `log`
-> and faked the fraction with a `T/255` division — now removed.)
-
-## Status
-
-Phases 1–10 (+ 2.5) complete — the multi-channel counter is functionally whole:
-scaffold, the loading pipeline (separate R/G/B/Gray slots + an ImageJ `.roi` slot,
-per-channel extraction with Gray using luminance, dimension validation), the
-aligned canvas stack (composite → dashed AOI boundary → marker overlay), channel
-compositing (per-channel opacity/visibility + Additive/Opacity blend, all
-pixel-level; each channel's **composite colour is fixed** at its config default and
-the per-channel colour picker controls **marker colour only**), **per-channel
-detection**, and **cross-channel co-localization**.
-
-The AOI is an **ImageJ `.roi` polygon**: a custom binary parser
-(`core/roiParser.js`) reads the format and `core/rasterize.js` fills it (scanline
-even-odd) into the binary mask the worker uses — done once on load. Detection runs
-the full LoG + NMS pipeline **independently on each channel** in a Web Worker. The
-**AOI is a pure spatial restriction**: detection runs on the whole image and only
-cells whose centre falls inside the ROI are kept. This keeps the relative `log`
-threshold reference image-global, so a smaller ROI can only ever *reduce* the count
-(the in-ROI result is a strict subset of the whole-image result) — never raise it.
-A co-localization pass then matches cells across channels within a **Co-R** radius
-(every pair + the full set; **Gray is excluded by default** — set `coloc: true` on
-the Gray channel in `config.js` to include it). The overlay shows per-channel dots
-(small, fixed-radius) plus larger mixed-colour
-co-localization discs; the panel shows a total plus per-channel and per-combo
-counts. Display styling and Co-R never re-run detection — counts are stable. CSV
-exports one row per cell tagged with its channel.
-
-**Detection params are per-channel** (Phase 9): a "Link channels" toggle (default
-on) shares one R/Dmin/T set across all channels; unlink it to tune each channel's
-R/Dmin/T independently. The worker merges per-channel overrides onto the shared
-params. Threshold mode, fluorescent mode, and Co-R remain global.
-
-**ROI editing** (Phase 11): once an `.roi` loads, a small editor appears to
-**rotate** it (degrees — seeded from the file's stored rotation at header offset
-36) and **reposition** it by toggling "Move ROI" and dragging on the image. Edits
-re-rasterise the mask and re-run detection; the current angle is shown in the ROI
-slot status. The marker tools (**"Add markers"** and **"Marker style"**) live in the
-**title bar** so they're always reachable without scrolling the control panel, and the
-tool version (from `APP_VERSION` in `config.js`) is pinned at the bottom of the panel.
-An **"Add markers"** tool turns the image into an edit surface where a
-click resolves in priority order: near a **hand-placed marker** → remove it; near an
-**auto-detected marker of the SELECTED channel** → exclude it (it disappears from the
-overlay, chips, headline, "View results", and CSV as if never detected — no
-re-detection, a pure filter; you can only prune the channel you're editing, never
-another layer's even when it's visible); empty space → place a new
-**channel-attributed** marker. A channel selector picks which channel a new marker
-belongs to, and **Reset** clears all manual markers *and* restores every excluded
-auto-detection in one click. Each manual marker draws as a small numbered square in
-its channel's marker colour (labels continue that channel's detected sequence) and
-hides with that channel. Manual markers behave **exactly like detected cells**: they
-are folded into that channel's count *and co-localize* — so a hand-placed marker
-moves the overlapping headline, the combo chips, the "View results" modal, and the
-CSV (exported under its own channel id, blank intensity, `inside_aoi` per point). It
-shares the image canvas with the ROI move tool, so only one is active at a time. A
-**"Marker style"** toggle switches the per-channel detection markers between
-**dots** (fixed-radius filled dots, the default) and **rings** (unfilled circles at
-each channel's detected R) — a display-only repaint that never re-runs detection.
-Manual squares follow the toggle too (filled in dots mode, hollow in rings mode) so
-they stay distinct from the detection look; co-loc discs are unaffected. **Export PNG** flattens the current view (composite
-+ AOI boundary + markers) into one image and downloads it. The keys **R / G / B / Y**
-toggle each channel's visibility (simple toggle; ignored while typing in a field).
-
-**Export** (Phase 10): a **"View results"** button opens a modal with the total,
-AOI pixel area, per-channel and per-combination count tables (colour-dotted), and a
-scrollable full per-cell table. **Export CSV** writes a `#`-commented summary block
-(per-channel/per-combo totals, AOI area, channel colours) followed by one row per
-cell with `cell_id, channel, x, y, intensity, inside_aoi, colocalized_with`. The
-`colocalized_with` column is computed symmetrically, so each cell lists every other
-channel it co-localizes with within Co-R.
-
-The **headline count** (Phase 12) is channel-aware: with one active (loaded +
-visible) channel it shows that channel's own count; with several it shows the
-**overlapping** count — cells co-localized across *all* active channels within Co-R
-(the intersection, not a double-counting sum) — and the label switches to
-"overlapping". Toggling a channel's visibility updates it live, no re-detection.
-
-Next up (`todo.txt`): the test/QA pass (Phase 13).
