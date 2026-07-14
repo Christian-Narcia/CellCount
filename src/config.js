@@ -6,7 +6,7 @@
  */
 
 /** Tool version, shown in the panel footer. Bump on release. */
-export const APP_VERSION = '0.1.102';
+export const APP_VERSION = '0.1.103';
 
 /** Detection parameters (also the initial slider values). */
 export const DEFAULT_PARAMS = Object.freeze({
