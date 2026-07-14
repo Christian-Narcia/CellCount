@@ -1,146 +1,115 @@
 /**
- * detect.js — ITCN detection pipeline orchestrator.
+ * detect.js — the ITCN detection pipeline.
  *
- * Composes the individual algorithm steps into the full Laplacian-of-Gaussian
- * blob detector. Pure and DOM-free: this is the single entry point the worker
- * calls per channel, and it can also be unit-tested directly in Node.
+ * A faithful port of the ITCN ImageJ plugin (Kuo & Byun, UCSB — `Itcn_.java`), so
+ * that the same parameters produce the same counts here as they do in Fiji. The
+ * three stages map one-to-one onto the plugin's `run()`:
  *
- * Pipeline:  (invert + AOI mask) → Gaussian blur → Laplacian → local extrema
- *            → threshold → NMS
+ *   1. CONVOLVE with ITCN's width x width LoG kernel      -> itcnFilter.js
+ *   2. SOFT-THRESHOLD the response: S = max(0, S - T)     -> here
+ *   3. GREEDY peak search with a minDist suppression disk -> itcnPeaks.js
+ *
+ * PARAMETER MAPPING. ITCN's "Width" field is the nucleus DIAMETER; this tool's R is
+ * the RADIUS, so width = 2R. A Fiji user with Width=20 uses R=10 here. Everything
+ * else follows from width (see config.js DERIVE):
+ *
+ *   sigma   = (width - 1) / 3        NOT R/sqrt(2)
+ *   kernel  = width x width          (a tight ~1.5 sigma truncation)
+ *   epsilon = floor(width / 3)       local-max verification radius
+ *
+ * THE THRESHOLD IS ABSOLUTE. This is the parameter that most often gets mis-ported.
+ * ITCN compares the response against T directly — T is a fixed bar in units of 8-bit
+ * intensity, made meaningful by the kernel's 1/sum(Gaussian) normalization
+ * (itcnKernel.js). It is NOT a fraction of the strongest blob in the image. An
+ * earlier build here normalized by the image maximum, which coupled every cell's
+ * fate to the brightest object in the field: adding one saturated speck could LOWER
+ * the count of everything else, and the same cells counted differently depending on
+ * what else was in frame. Fiji's default T = 0.2 on this absolute scale.
+ *
+ * AOI MASKING is a spatial gate on the peak search, exactly as in ITCN: masked-out
+ * pixels are never selected as peaks and so can never suppress an in-ROI one. With
+ * the threshold now absolute, the ROI cannot move the detection bar at all — the
+ * in-ROI count is always a strict subset of the whole-image count.
+ *
+ * Pure and DOM-free: the single entry point the worker calls per channel, and
+ * unit-testable directly in Node.
  */
 
-import { DERIVE, thresholdScale } from '../config.js';
+import { DERIVE } from '../config.js';
 import { rgbaToGrayscale } from './grayscale.js';
-import { gaussianBlur } from './gaussian.js';
-import { laplacian } from './laplacian.js';
-import { applyThreshold } from './threshold.js';
-import { nonMaxSuppression } from './nms.js';
+import { itcnResponse } from './itcnFilter.js';
+import { findItcnPeaks } from './itcnPeaks.js';
 
 /**
  * @typedef {Object} DetectParams
- * @property {number} R      - expected cell radius (px)
- * @property {number} Dmin   - minimum separation between cells (px)
- * @property {number} T      - threshold: Fiji 0–10 ('log') or absolute 0–255 ('intensity')
- * @property {boolean} fluorescent - bright cells on dark bg → no inversion
- * @property {'log'|'intensity'} [thresholdMode]
+ * @property {number} R      - expected cell RADIUS (px). ITCN's Width = 2R.
+ * @property {number} Dmin   - minimum separation between cells (px). ITCN default = R.
+ * @property {number} T      - threshold: absolute response ('itcn', Fiji default 0.2)
+ *                             or absolute pixel value 0-255 ('intensity')
+ * @property {boolean} fluorescent - bright cells on dark bg. Equivalent to ITCN's
+ *                             "Detect Dark Peaks" being UNCHECKED.
+ * @property {'itcn'|'intensity'} [thresholdMode]
  */
 
 /**
  * Detect cells in a single grayscale channel, optionally restricted to an AOI.
  *
- * The detector finds BRIGHT blobs (negative LoG centres). So we first map the
- * channel into "bright-blob space":
- *   • fluorescent → cells are already bright → keep as-is.
- *   • brightfield → cells are dark → invert so they become bright peaks.
- * (This is intentionally the reverse of todo.txt Step A — see the project README.)
- *
- * AOI MASKING is a pure SPATIAL RESTRICTION: it controls WHERE cells are counted,
- * never the image content the detector sees or the sensitivity bar it uses. So we
- * run the full LoG pipeline on the WHOLE image and only at the end keep peaks
- * whose centre lies inside the ROI.
- *
- *   WHY NOT zero-out everything outside the ROI before blurring (the obvious
- *   "mask first" approach)? Two bugs:
- *     1. The relative 'log' threshold is `(T/10) × max blob strength` (T on the
- *        Fiji 0–10 scale). If the max
- *        is taken over only the in-ROI content, then drawing a smaller ROI that
- *        excludes the brightest cells LOWERS the bar and detects MORE faint cells
- *        — a smaller region yielding a higher count, which is wrong and confusing.
- *        Computing the reference over the full image keeps the bar ROI-independent,
- *        so the in-ROI result is always a strict subset of the whole-image result.
- *     2. Zeroing creates an artificial high-contrast EDGE along the ROI boundary
- *        whenever the background isn't ~0, and the Laplacian fires on it → false
- *        detections just inside the edge (the very thing todo.txt Phase 6 warns
- *        about). Not touching the pixels avoids the edge entirely.
- *   A blob centred OUTSIDE the ROI keeps its peak outside (Gaussian blur doesn't
- *   move an isolated peak), so the centre-in-ROI test cleanly excludes it without
- *   needing to blank the region. The mask is applied AFTER thresholding (so it
- *   can't change the bar) and BEFORE NMS (so an out-of-ROI peak can't suppress an
- *   in-ROI one).
- *
- * @param {Float32Array} gray - raw channel intensity (0–255), NOT yet inverted
- * @param {number} width
- * @param {number} height
+ * @param {Float32Array} gray - raw channel intensity (0-255), NOT inverted
+ * @param {number} width - image width
+ * @param {number} height - image height
  * @param {DetectParams} params
  * @param {Uint8Array|null} [mask] - 1 inside AOI / 0 outside; null = whole image
  * @returns {Array<{x:number,y:number,intensity:number,strength:number}>}
  */
 export function detectChannel(gray, width, height, params, mask = null) {
-  const { R, Dmin, T, fluorescent, thresholdMode = 'log' } = params;
+  const { R, Dmin, T, fluorescent, thresholdMode = 'itcn' } = params;
 
-  // Step A: map into bright-blob space (no masking here — see the note above).
-  const n = width * height;
-  const proc = new Float32Array(n);
-  for (let i = 0; i < n; i++) proc[i] = fluorescent ? gray[i] : 255 - gray[i];
+  const filterWidth = DERIVE.filterWidth(R); // ITCN "Width" (diameter)
+  const darkPeaks = !fluorescent; // ITCN "Detect Dark Peaks"
 
-  // Step B + C: Laplacian of Gaussian.
-  const sigma = DERIVE.sigma(R);
-  const blurred = gaussianBlur(proc, width, height, sigma);
-  const log = laplacian(blurred, width, height);
+  // 1. Convolve. Peaks are MAXIMA of this response (itcnFilter.js explains why the
+  //    polarity is handled by inverting the image rather than flipping the kernel).
+  const resp = itcnResponse(gray, width, height, filterWidth, darkPeaks);
 
-  // Local maxima of -LoG (bright-blob centres) over the WHOLE image, so the
-  // relative threshold reference below is image-global and ROI-independent.
-  const nbRadius = Math.max(1, Math.round(R / 2));
-  const peaks = findLocalMaxima(log, proc, width, height, nbRadius);
+  // 2. Soft-threshold: everything below T is flattened to exactly 0 and the rest is
+  //    shifted down. Zeroed pixels can never be picked as peaks, so this is the
+  //    detection bar. In 'intensity' mode the response bar is off (T gates the
+  //    underlying pixel value instead, below).
+  const t = thresholdMode === 'intensity' ? 0 : T;
+  if (t > 0) {
+    for (let i = 0; i < resp.length; i++) {
+      resp[i] = resp[i] < t ? 0 : resp[i] - t;
+    }
+  }
 
-  // Step D: threshold (intensity or relative LoG — reference is the global max).
-  // thresholdScale maps the 'log' Fiji 0–10 value to a 0–1 peak fraction.
-  let candidates = applyThreshold(peaks, thresholdMode, T, thresholdScale(thresholdMode));
-  // AOI restriction: keep only cells whose centre is inside the ROI. After the
-  // threshold (so the ROI never moves the bar), before NMS (so an out-of-ROI peak
-  // can't suppress an in-ROI one).
-  if (mask) candidates = candidates.filter((c) => mask[c.y * width + c.x] === 1);
+  // 3. Greedy peak search: verify within epsilon, suppress within Dmin.
+  const epsilon = DERIVE.epsilon(R);
+  const peaks = findItcnPeaks(resp, width, height, epsilon, Dmin, mask, DERIVE.border);
 
-  // Step E: min separation.
-  return nonMaxSuppression(candidates, Dmin);
+  // Report the intensity in "bright-blob space" (what the detector effectively saw),
+  // so it reads high for a detected cell in either mode.
+  const cells = peaks.map((p) => {
+    const raw = gray[p.y * width + p.x];
+    return {
+      x: p.x,
+      y: p.y,
+      intensity: fluorescent ? raw : 255 - raw,
+      strength: p.strength,
+    };
+  });
+
+  if (thresholdMode === 'intensity') return cells.filter((c) => c.intensity >= T);
+  return cells;
 }
 
 /**
  * Legacy single-image entry: grayscale an RGBA buffer then detect (no mask).
- * Kept for direct/unit use; the worker now calls detectChannel per channel.
+ * Kept for direct/unit use; the worker calls detectChannel per channel.
  *
  * @param {Uint8ClampedArray|Uint8Array} rgba
  * @returns {{ cells: Array }}
  */
 export function detect(rgba, width, height, params) {
-  const gray = rgbaToGrayscale(rgba, width, height, false); // raw; detectChannel inverts
+  const gray = rgbaToGrayscale(rgba, width, height, false); // raw; detectChannel handles polarity
   return { cells: detectChannel(gray, width, height, params) };
-}
-
-/**
- * Scan for pixels that are a local maximum of -LoG within `nbRadius` over the
- * whole image. Records both blob strength and underlying intensity so the
- * threshold step can filter by either. Background (LoG ≈ 0) is skipped cheaply via
- * strength > 0. (AOI restriction happens after thresholding — see detectChannel.)
- */
-function findLocalMaxima(log, gray, width, height, nbRadius) {
-  const candidates = [];
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      const strength = -log[idx]; // bright-blob centres have strength > 0
-      if (strength <= 0) continue;
-
-      if (isLocalMax(log, width, height, x, y, nbRadius, log[idx])) {
-        candidates.push({ x, y, intensity: gray[idx], strength });
-      }
-    }
-  }
-  return candidates;
-}
-
-/** True if log[x,y] is the minimum (i.e. -LoG is the max) in its neighborhood. */
-function isLocalMax(log, width, height, x, y, r, centerVal) {
-  const x0 = Math.max(0, x - r);
-  const x1 = Math.min(width - 1, x + r);
-  const y0 = Math.max(0, y - r);
-  const y1 = Math.min(height - 1, y + r);
-  for (let yy = y0; yy <= y1; yy++) {
-    for (let xx = x0; xx <= x1; xx++) {
-      if (xx === x && yy === y) continue;
-      // Center must be the strongest (most negative LoG) in the window.
-      if (log[yy * width + xx] < centerVal) return false;
-    }
-  }
-  return true;
 }

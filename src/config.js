@@ -15,26 +15,41 @@
  * where there is no service worker at all (opened over file://). Keeping it in step
  * with the worker is cosmetic, not functional.
  */
-export const APP_VERSION = '0.1.05';
+export const APP_VERSION = '0.1.06';
 
-/** Detection parameters (also the initial slider values). */
+/**
+ * Detection parameters (also the initial slider values).
+ *
+ * These are ITCN's own defaults, translated into this tool's parameter names. The
+ * ITCN plugin ships Width=20, Minimum Distance=10, Threshold=0.2 — and because our
+ * R is a RADIUS where ITCN's Width is a DIAMETER (R = Width/2), that lands on
+ * R=10, Dmin=10, T=0.2. Loading an image and pressing go should now give the same
+ * count Fiji gives with its own defaults.
+ */
 export const DEFAULT_PARAMS = Object.freeze({
-  /** Expected cell radius in pixels. Drives the Gaussian sigma. */
+  /**
+   * Expected cell RADIUS in pixels. ITCN's "Width" field is the DIAMETER, so
+   * Width = 2R — a Fiji user who types Width=20 uses R=10 here. R drives the
+   * sigma, the kernel size, and the local-max radius (see DERIVE below).
+   */
   R: 10,
-  /** Minimum allowed separation between two cell centers, in pixels. */
-  Dmin: 20,
+  /**
+   * Minimum allowed separation between two cell centers, in pixels — ITCN's
+   * "Minimum Distance". ITCN defaults it to Width/2, i.e. exactly R, and its
+   * dialog re-derives it from Width every time Width changes.
+   */
+  Dmin: 10,
   /**
    * Threshold value. Its RANGE and MEANING depend on `thresholdMode`:
-   *   • 'log'       → a RELATIVE LoG threshold on the Fiji/ImageJ ITCN 0.0–10.0
-   *                   scale (internally value/10 = fraction of the peak response;
-   *                   default). Bit-depth independent — identical on 8- and 16-bit.
-   *   • 'intensity' → an ABSOLUTE pixel value 0–255.
-   * See THRESHOLD_MODES below + algorithm/threshold.js. The T slider re-ranges to
-   * match the selected mode (controls.js), so 2.0 here is "20% of peak response".
+   *   • 'itcn'      → an ABSOLUTE bar on the LoG blob response, on ITCN's own
+   *                   0.0–10.0 scale. Fiji's default is 0.2. NOT a fraction of the
+   *                   image's strongest blob — see THRESHOLD_MODES.
+   *   • 'intensity' → an ABSOLUTE pixel value 0–255 (not an ITCN feature).
+   * The T slider re-ranges to match the selected mode (controls.js).
    */
-  T: 2,
-  /** How T is interpreted — see THRESHOLD_MODES / algorithm/threshold.js. */
-  thresholdMode: 'log',
+  T: 0.2,
+  /** How T is interpreted — see THRESHOLD_MODES / algorithm/detect.js. */
+  thresholdMode: 'itcn',
   /**
    * Fluorescent mode: bright cells on dark background (no inversion needed).
    * Defaults ON — this is a fluorescence tool (R/G/B channels, co-localization),
@@ -112,54 +127,52 @@ export const COMPOSITE = Object.freeze({
 
 /**
  * Threshold modes — drive BOTH the "Threshold mode" dropdown AND the T slider's
- * range/scale, because T means a genuinely different thing in each mode:
+ * range/step, because T means a genuinely different thing in each mode:
  *
- *   • 'log'       T is a RELATIVE LoG-strength threshold on the Fiji/ImageJ ITCN
- *                 0.0–10.0 decimal scale (so ITCN users see the number they know).
- *                 Internally T / `scale` (T/10) is the fraction of the strongest
- *                 LoG blob response a candidate must reach — e.g. 2.0 keeps peaks
- *                 ≥ 20% of the peak strength. Independent of bit depth — the same
- *                 T behaves identically on 8-bit and 16-bit images.
+ *   • 'itcn'      T is ITCN's own threshold: an ABSOLUTE bar on the LoG blob
+ *                 response. The response is in units of 8-bit intensity (the
+ *                 kernel is normalized by the sum of its Gaussian — see
+ *                 algorithm/itcnKernel.js), so T is a minimum blob CONTRAST, not a
+ *                 percentage of anything. ITCN's dialog exposes exactly this range
+ *                 — 0.0–10.0, step 0.1 — and defaults to 0.2. Type the number you
+ *                 would type in Fiji.
+ *
+ *                 ⚠ It is NOT a fraction of the strongest blob in the image. An
+ *                 earlier build divided by the image maximum and called that "the
+ *                 Fiji 0–10 scale"; that misread ITCN's `thresPrecision = 10`
+ *                 constant, which is only the integer quantization of the plugin's
+ *                 threshold SCROLLBAR (scroll value = 10 x threshold), not a user-
+ *                 facing scale. Normalizing by the image max also couples every
+ *                 cell to the brightest object in frame: one saturated speck raises
+ *                 the bar and silently drops real, dimmer nuclei.
+ *
  *   • 'intensity' T is an ABSOLUTE pixel value (0–255). A candidate is kept only
- *                 if its underlying intensity ≥ T. (The decoder normalises all
- *                 images — including 16-bit TIFFs — to a 0–255 display range, so
- *                 this single range is correct regardless of source bit depth.)
+ *                 if its underlying intensity ≥ T. NOT an ITCN feature — a
+ *                 convenience gate this tool adds. (The decoder normalises all
+ *                 images, including 16-bit TIFFs, to a 0–255 display range, so this
+ *                 range is correct regardless of source bit depth.)
  *
  * `T` is the slider config (min/max/step/unit) to swap in when that mode is
  * selected; `default` seeds a sensible value when the value can't be carried over.
- * `scale` is the divisor that converts the slider value to the algorithm's native
- * unit (10 maps the Fiji 0–10 'log' scale to a 0–1 fraction; 1 leaves 'intensity'
- * as raw pixels). Switching modes rescales the current knob to the same RELATIVE
- * position in the new range (controls.js), so the slider never jumps to an extreme.
+ * Switching modes rescales the current knob to the same RELATIVE position in the
+ * new range (controls.js), so the slider never jumps to an extreme.
  */
 export const THRESHOLD_MODES = Object.freeze([
   {
-    value: 'log',
-    label: 'LoG strength (Fiji 0–10)',
-    T: { min: 0, max: 10, step: 0.1, unit: '', default: 2 },
-    scale: 10,
+    value: 'itcn',
+    label: 'LoG response (ITCN, absolute)',
+    T: { min: 0, max: 10, step: 0.1, unit: '', default: 0.2 },
   },
   {
     value: 'intensity',
     label: 'Pixel intensity (absolute 0–255)',
     T: { min: 0, max: 255, step: 1, unit: '', default: 30 },
-    scale: 1,
   },
 ]);
 
 /** The T slider range/scale for a given threshold mode (falls back to the first). */
 export function thresholdRange(mode) {
   return (THRESHOLD_MODES.find((m) => m.value === mode) || THRESHOLD_MODES[0]).T;
-}
-
-/**
- * The divisor that converts a mode's slider value to the algorithm's native unit:
- * 10 for the Fiji-style 'log' scale (→ a 0–1 fraction of the peak), 1 for the
- * absolute 'intensity' mode. Used by detect.js when calling applyThreshold.
- */
-export function thresholdScale(mode) {
-  const m = THRESHOLD_MODES.find((x) => x.value === mode) || THRESHOLD_MODES[0];
-  return m.scale ?? 1;
 }
 
 /** T slider range for the out-of-box mode — keeps SLIDERS in sync with DEFAULT_PARAMS. */
@@ -286,10 +299,25 @@ export const AOI_STYLE = Object.freeze({
 });
 
 /**
- * Relationship helpers — derived defaults the algorithm uses.
- * Centralized so the "sigma = R / sqrt(2)" rule lives in exactly one place.
+ * Relationship helpers — everything the detector derives from the cell radius R.
+ *
+ * These are ITCN's constants, transcribed from `Itcn_.java`, not chosen by us. They
+ * all key off ITCN's "Width" field, which is the nucleus DIAMETER — so width = 2R.
+ * Centralized here so the mapping lives in exactly one place.
+ *
+ * ⚠ Do NOT "fix" sigma to R/sqrt(2). That is the textbook Lindeberg scale (it puts
+ * the LoG zero-crossing on the cell radius) and it is a perfectly defensible choice
+ * — but it is not what ITCN does, and this tool's contract is to reproduce ITCN's
+ * counts. ITCN uses sigma = (width - 1)/3, which for R=10 is 6.33 rather than 7.07.
+ * An earlier build used R/sqrt(2) and over-smoothed by ~12%.
  */
 export const DERIVE = Object.freeze({
-  /** Gaussian sigma so the LoG zero-crossing lands at the cell radius. */
-  sigma: (R) => R / Math.SQRT2,
+  /** ITCN's "Width" (nucleus diameter, px) from our radius R. */
+  filterWidth: (R) => 2 * R,
+  /** ITCN's Gaussian sigma: (width - 1) / 3. */
+  sigma: (R) => (2 * R - 1) / 3,
+  /** Local-max verification radius: floor(width / 3). */
+  epsilon: (R) => Math.floor((2 * R) / 3),
+  /** Image-edge exclusion, px. ITCN skips a 1px border of the search region. */
+  border: 1,
 });

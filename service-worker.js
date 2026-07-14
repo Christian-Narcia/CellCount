@@ -25,7 +25,7 @@
  * worker intercepts its fetch too, so without it detection breaks offline.
  */
 
-const VERSION = '0.1.05';
+const VERSION = '0.1.06';
 const CACHE = `itcn-${VERSION}`;
 
 const ASSETS = [
@@ -42,11 +42,10 @@ const ASSETS = [
   './src/pwa.js',
   './src/algorithm/colocalize.js',
   './src/algorithm/detect.js',
-  './src/algorithm/gaussian.js',
   './src/algorithm/grayscale.js',
-  './src/algorithm/laplacian.js',
-  './src/algorithm/nms.js',
-  './src/algorithm/threshold.js',
+  './src/algorithm/itcnFilter.js',
+  './src/algorithm/itcnKernel.js',
+  './src/algorithm/itcnPeaks.js',
   './src/core/channelExtract.js',
   './src/core/fileLoader.js',
   './src/core/history.js',
