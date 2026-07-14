@@ -11,12 +11,18 @@
  * A no-op when service workers are unavailable (e.g. non-secure context).
  */
 
+import { APP_VERSION } from './config.js';
+
 export function registerPWA() {
   if (!('serviceWorker' in navigator)) return;
 
   window.addEventListener('load', () => {
+    // The version rides in the SW URL's query string. Bumping APP_VERSION in
+    // config.js therefore changes the registered script URL, which the browser
+    // treats as a NEW worker — it installs, activates, drops the old cache, and
+    // triggers the update banner below. So config.js is the SINGLE place to bump.
     navigator.serviceWorker
-      .register('./service-worker.js')
+      .register(`./service-worker.js?v=${encodeURIComponent(APP_VERSION)}`)
       .then((reg) => {
         // A build was already waiting before this page finished loading.
         if (reg.waiting && navigator.serviceWorker.controller) {

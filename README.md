@@ -25,6 +25,10 @@ npx serve .
 
 Then open <http://localhost:8000>.
 
+## Offline available after first visit (PWA)
+
+The app is an installable Progressive Web App and works **fully offline**.
+
 ### Viewing & verifying
 
 Once an image is loaded:
@@ -45,9 +49,17 @@ local. Dependencies flow one direction: `main.js` wires modules together but
 holds no logic of its own.
 
 ```
+.
+├── index.html             ← app shell (loads vendor/utif.js + src/main.js)
+├── manifest.json          ← PWA manifest (installable; name, icons, colors)
+├── service-worker.js      ← offline cache (precache + versioned cleanup)
+├── vendor/utif.js         ← TIFF decoder, bundled locally (was a CDN) for offline
+├── icons/                 ← icon-192.png · icon-512.png (home-screen / launcher)
+│
 src/
 ├── config.js              ← single source of truth for all defaults/constants
 ├── main.js                ← entry point; composes the modules below
+├── pwa.js                 ← service-worker registration + "update available" banner
 │
 ├── algorithm/             ← pure, DOM-free functions (also run inside worker)
 │   ├── grayscale.js       ·  RGBA → grayscale (+ optional inversion)

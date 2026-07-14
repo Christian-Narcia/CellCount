@@ -6,11 +6,13 @@
  * the network. After one online visit the whole app works with no connection.
  *
  * ── UPDATING THE APP ──────────────────────────────────────────────────────────
- * Bump VERSION below whenever you deploy changed files. On the next visit the
- * browser sees a byte-different service worker, installs it, and `activate`
- * deletes every old cache. The page (src/pwa.js) detects the waiting worker and
- * shows an "Update available — Reload" banner so users are never stuck on a
- * stale version. Keep VERSION in step with APP_VERSION in src/config.js.
+ * Bump APP_VERSION in src/config.js — that's the ONLY place. src/pwa.js registers
+ * this worker as `service-worker.js?v=<APP_VERSION>`, so a version bump changes the
+ * registered script URL; the browser treats that as a new worker, installs it, and
+ * `activate` deletes every old cache. The page then shows an "Update available —
+ * Reload" banner so users are never stuck on a stale version. This worker reads the
+ * same version back off its own URL (?v=…) to name the cache, so the two always
+ * match with no second edit. (VERSION below is only a fallback if no ?v= is present.)
  *
  * Paths are RELATIVE (no leading "/") so this works whether the app is served
  * from a domain root or a GitHub Pages project subpath (e.g. /cell-count/).
@@ -18,7 +20,7 @@
  * worker intercepts its fetch too, so without it detection breaks offline.
  */
 
-const VERSION = '0.1.0';
+const VERSION = new URL(self.location.href).searchParams.get('v') || '0.1.0';
 const CACHE = `itcn-${VERSION}`;
 
 const ASSETS = [
