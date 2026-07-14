@@ -43,9 +43,13 @@ export function registerPWA() {
       .catch((err) => console.warn('Service worker registration failed:', err));
 
     // When the waiting worker takes over, reload once onto the new version.
+    // Only do this if the page ALREADY had a controller at load — i.e. this is a
+    // real update. On the very first visit, activate's clients.claim() also fires
+    // controllerchange, and we must NOT reload then (nothing changed yet).
+    const hadController = !!navigator.serviceWorker.controller;
     let reloaded = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloaded) return;
+      if (!hadController || reloaded) return;
       reloaded = true;
       window.location.reload();
     });

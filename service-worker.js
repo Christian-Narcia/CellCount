@@ -65,9 +65,16 @@ const ASSETS = [
   './src/workers/detector.worker.js',
 ];
 
-// Precache the app shell on install.
+// Precache the app shell on install. `cache: 'reload'` forces every asset to be
+// fetched from the NETWORK, bypassing the browser's HTTP cache — otherwise a host
+// like GitHub Pages (which sends a ~10-min max-age) can hand back the OLD file, so
+// the "new" cache silently fills with stale bytes and the update never takes hold.
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
+  event.waitUntil(
+    caches
+      .open(CACHE)
+      .then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' }))))
+  );
 });
 
 // Drop every old versioned cache on activate, then take control of open pages.
