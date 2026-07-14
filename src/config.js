@@ -15,7 +15,7 @@
  * where there is no service worker at all (opened over file://). Keeping it in step
  * with the worker is cosmetic, not functional.
  */
-export const APP_VERSION = '0.1.04';
+export const APP_VERSION = '0.1.05';
 
 /** Detection parameters (also the initial slider values). */
 export const DEFAULT_PARAMS = Object.freeze({
@@ -59,14 +59,29 @@ export const DEFAULT_PARAMS = Object.freeze({
  * that toggles this channel's visibility (Phase 11; ui/shortcuts.js).
  */
 export const CHANNELS = Object.freeze([
-  { key: 'r', label: 'Red channel', component: 0, defaultColor: '#ff0000', coloc: true, shortcutKey: 'r' },
-  { key: 'g', label: 'Green channel', component: 1, defaultColor: '#00ff00', coloc: true, shortcutKey: 'g' },
-  { key: 'b', label: 'Blue channel', component: 2, defaultColor: '#0000ff', coloc: true, shortcutKey: 'b' },
-  // Gray is a reference/brightfield layer — detected + counted, but excluded from
+  { key: 'r', label: 'EdU channel', short: 'EdU', component: 0, defaultColor: '#ff0000', coloc: true, shortcutKey: 'r' },
+  { key: 'g', label: 'GFP channel', short: 'GFP', component: 1, defaultColor: '#00ff00', coloc: true, shortcutKey: 'g' },
+  { key: 'b', label: 'DAPI channel', short: 'DAPI', component: 2, defaultColor: '#0000ff', coloc: true, shortcutKey: 'b' },
+  // The luma channel is a reference/brightfield layer — detected + counted, but excluded from
   // co-localization combinations (set coloc:true if you want it to participate).
-  // Its visibility shortcut is Y (Gray's slot is the 4th; R/G/B are taken).
-  { key: 'gray', label: 'Gray channel', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y' },
+  // Its visibility shortcut is Y (its slot is the 4th; R/G/B are taken).
+  { key: 'gray', label: 'CC1/PDGFR channel', short: 'CC1', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y' },
 ]);
+
+/**
+ * Display names for a channel key. Internal keys stay r/g/b/gray (they index the
+ * RGBA component and the worker payload); `short` is what the UI and the results
+ * table show — e.g. 'gray' → 'CC1'.
+ */
+const CHANNEL_SHORT = Object.freeze(
+  Object.fromEntries(CHANNELS.map((c) => [c.key, c.short]))
+);
+
+/** Short display name for a channel key ('gray' → 'CC1'). */
+export const channelName = (key) => CHANNEL_SHORT[key] || String(key).toUpperCase();
+
+/** Display name for a co-localization combo key ('r+gray' → 'EdU+CC1'). */
+export const comboName = (combo) => String(combo).split('+').map(channelName).join('+');
 
 /**
  * Region-of-interest input — an ImageJ .roi polygon file (parsed by

@@ -7,7 +7,8 @@
  * open(); this module just renders it. Colours are pre-resolved by the caller, so
  * there is no business logic here.
  *
- * Report shape:
+ * Report shape (`label`, `channel` and `colocalizedWith` arrive as display names —
+ * EdU / GFP / DAPI / CC1 — already resolved from the channel keys by main.js):
  *   {
  *     total: number,
  *     aoiArea: number|null,
@@ -112,11 +113,11 @@ function cellTable(cells) {
     table.appendChild(
       rowEl('td', [
         String(c.id),
-        c.channel.toUpperCase(),
+        c.channel,
         String(c.x),
         String(c.y),
         c.intensity === '' || c.intensity == null ? '—' : String(c.intensity),
-        c.colocalizedWith ? c.colocalizedWith.toUpperCase() : '—',
+        c.colocalizedWith || '—',
       ])
     );
   }

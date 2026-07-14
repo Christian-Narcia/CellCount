@@ -25,7 +25,7 @@
  * worker intercepts its fetch too, so without it detection breaks offline.
  */
 
-const VERSION = '0.1.04';
+const VERSION = '0.1.05';
 const CACHE = `itcn-${VERSION}`;
 
 const ASSETS = [

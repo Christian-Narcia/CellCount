@@ -21,7 +21,15 @@
  *                 across channels is the next phase.
  */
 
-import { DEFAULT_PARAMS, CHANNELS, ROI_INPUT, APP_VERSION, MARKER_STYLE } from './config.js';
+import {
+  DEFAULT_PARAMS,
+  CHANNELS,
+  ROI_INPUT,
+  APP_VERSION,
+  MARKER_STYLE,
+  channelName,
+  comboName,
+} from './config.js';
 import { decodeFile } from './core/imageDecoder.js';
 import { colocalize, colocalizationByCell, colocalizeAll } from './algorithm/colocalize.js';
 import { extractChannel, maskCoverage, sameSize } from './core/channelExtract.js';
@@ -796,10 +804,10 @@ function updateCounts() {
     const detected = includedFor(c.key).length; // excluded cells removed
     const manual = manualMarkers.count(c.key);
     if (!lastResults[c.key] && !manual) continue; // nothing loaded/placed for this channel
-    parts.push(chip(colorOf(c.key), c.key.toUpperCase(), detected + manual));
+    parts.push(chip(colorOf(c.key), channelName(c.key), detected + manual));
   }
   for (const combo of Object.keys(lastColoc)) {
-    const label = combo.split('+').map((k) => k.toUpperCase()).join('+');
+    const label = comboName(combo);
     const color = mixColors(combo.split('+').map(colorOf));
     parts.push(comboChip(color, label, lastColoc[combo].length, combo, colocDotsOn.has(combo)));
   }
@@ -916,7 +924,7 @@ function buildReport() {
     const manual = manualMarkers.count(c.key);
     if (!lastResults[c.key] && !manual) continue;
     const count = effective[c.key] ? effective[c.key].length : 0;
-    channels.push({ key: c.key, label: c.key.toUpperCase(), color: colorOf(c.key), count });
+    channels.push({ key: c.key, label: channelName(c.key), color: colorOf(c.key), count });
   }
 
   const combos = [];
@@ -924,7 +932,7 @@ function buildReport() {
     const members = combo.split('+');
     combos.push({
       key: combo,
-      label: members.map((k) => k.toUpperCase()).join('+'),
+      label: comboName(combo),
       color: mixColors(members.map(colorOf)),
       count: lastColoc[combo].length,
     });
@@ -941,11 +949,11 @@ function buildReport() {
     list.forEach((cell, i) => {
       cells.push({
         id: id++,
-        channel: c.key,
+        channel: channelName(c.key),
         x: cell.x,
         y: cell.y,
         intensity: cell.manual ? '' : Math.round(cell.intensity),
-        colocalizedWith: (cc[i] || []).join('+'),
+        colocalizedWith: (cc[i] || []).map(channelName).join('+'),
       });
     });
   }
