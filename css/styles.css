@@ -215,6 +215,8 @@ body {
   padding: 6px 8px;
   font-size: 0.85rem;
 }
+.manual-tools__undo,
+.manual-tools__redo,
 .manual-tools__reset { flex: none; }
 
 /* Marker-style tool (Phase 11) — "Marker style" dots/rings toggle (display-only). */

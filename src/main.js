@@ -28,6 +28,7 @@ import { extractChannel, maskCoverage, sameSize } from './core/channelExtract.js
 import { parseRoi, roiTypeName } from './core/roiParser.js';
 import { rasterizePolygon, maskContains } from './core/rasterize.js';
 import { transformPolygon, polygonCenter } from './core/roiTransform.js';
+import { createHistory } from './core/history.js';
 import { initChannelInputs } from './ui/channelInputs.js';
 import { createRoiControls } from './ui/roiControls.js';
 import { createManualMarkers } from './ui/manualMarkers.js';
@@ -40,7 +41,7 @@ import { createViewport } from './ui/viewport.js';
 import { initControls } from './ui/controls.js';
 import { drawMarkerGroups } from './ui/overlay.js';
 import { createResultsModal } from './ui/resultsTable.js';
-import { createChannelShortcuts } from './ui/shortcuts.js';
+import { createChannelShortcuts, createEditShortcuts } from './ui/shortcuts.js';
 import { downloadCsv } from './export/csv.js';
 import { downloadPng } from './export/png.js';
 import { registerPWA } from './pwa.js';
@@ -88,6 +89,17 @@ const worker = new Worker(new URL('./workers/detector.worker.js', import.meta.ur
 });
 const resultsModal = createResultsModal();
 
+// Undo stack (Phase 14A). Holds SNAPSHOTS of the user's edit state — see
+// editSnapshot() below for what's in one and history.js for why snapshots rather
+// than inverse commands. main.js owns it because it's the only module that can see
+// all three pieces of edit state (manual markers, exclusions, the ROI transform).
+const history = createHistory({
+  onChange: () => {
+    manualMarkers.setCanUndo(history.canUndo());
+    manualMarkers.setCanRedo(history.canRedo());
+  },
+});
+
 // ROI rotate/move editor. Owns the live transform; on a live edit (drag/typing)
 // we re-rasterise + redraw the boundary, and on commit we re-detect (the mask
 // gate changed). See ui/roiControls.js.
@@ -103,6 +115,9 @@ const roiControls = createRoiControls(el.roiControls, {
     if (dims && roi) runDetection();
   },
   onActivate: () => manualMarkers.deactivate(), // only one canvas tool at a time
+  // Undo (Phase 14B): fires once at the START of a gesture (drag / typing burst /
+  // Reset), so one drag is one Ctrl+Z rather than one per animation frame.
+  onBeforeTransform: () => history.push(editSnapshot()),
 });
 
 // Manual-marker tool. Owns the hand-placed, CHANNEL-ATTRIBUTED markers; on a
@@ -126,6 +141,15 @@ const manualMarkers = createManualMarkers(el.manualTools, {
   getDetectedMarkers: (activeKey) => excludableDetectedMarkers(activeKey),
   onExcludeDetected: (key, index) => excludeDetected(key, index),
   onReset: () => resetMarkerEdits(),
+  // Undo (Phase 14A): the tool calls this immediately BEFORE it mutates anything, so
+  // what we stack is the state as it was before the edit. A 'reset' with nothing to
+  // reset is skipped, so an idle Reset click can't push a no-op undo step.
+  onBeforeChange: (kind) => {
+    if (kind === 'reset' && !hasMarkerEdits()) return;
+    history.push(editSnapshot());
+  },
+  onUndo: () => undoEdit(),
+  onRedo: () => redoEdit(),
 });
 
 // Per-channel marker SHAPE toggle (dots vs rings). Display-only: a change just
@@ -209,6 +233,9 @@ const inputs = initChannelInputs(el.channelInputs, {
     } else {
       channels[key] = null;
     }
+    // Undoing an edit made against a file that's no longer loaded would restore
+    // markers/exclusions for an image the user can't see — drop the stack instead.
+    history.clear();
     if (noInputsLoaded()) resetStage();
     else refresh();
   },
@@ -249,6 +276,7 @@ async function loadChannel(key, file) {
     // know the image size.
     if (firstChannel && roi) applyRoi();
 
+    history.clear(); // a new file: the edits on the stack were made against other data
     refresh();
   } catch (err) {
     inputs.setStatus(key, `failed: ${err.message}`, true);
@@ -266,6 +294,9 @@ async function loadRoi(file) {
     inputs.setStatus(ROI_INPUT.key, `parsing ${file.name}…`);
     roi = parseRoi(await file.arrayBuffer());
     roiControls.show(roi.rotation); // seed rotation from the file, reveal the editor
+    // A different polygon: a stacked transform ({angle,dx,dy}) would now be undone
+    // onto the WRONG shape, so the stack goes with the old ROI.
+    history.clear();
     if (dims) {
       applyRoi();
       refresh(); // re-detect within the new ROI + redraw its boundary
@@ -370,6 +401,7 @@ function resetStage() {
   lastResults = {};
   lastColoc = {};
   for (const c of CHANNELS) excludedCells[c.key].clear();
+  history.clear(); // a new stage: every edit the stack refers to is gone
   lastDetectSig = null;
   layers.clearOverlay();
   layers.clearAoi();
@@ -450,6 +482,14 @@ worker.onmessage = (e) => {
     lastResults = data.perChannel;
     // New arrays replace the old ones, so prior exclusion indices are meaningless.
     for (const c of CHANNELS) excludedCells[c.key].clear();
+    // …and so are the ones sitting in the undo stack: index 7 in the OLD results is a
+    // different cell (or no cell) in the new ones, so restoring it would silently
+    // exclude the wrong cell. Strip the exclusions from every stacked snapshot, but
+    // KEEP the stack — manual markers and the ROI transform survive a re-detection
+    // untouched and are still perfectly undoable. (Clearing the whole stack instead
+    // would break undoing marker edits made before an ROI move, since an ROI move
+    // re-detects — and in 14B it would make a second consecutive ROI undo impossible.)
+    history.map((snap) => ({ ...snap, excluded: {} }));
     recolocalize();
     renderMarkers();
     updateCounts();
@@ -524,6 +564,92 @@ function resetMarkerEdits() {
   updateCounts();
   updateResultAvailability();
 }
+
+// ---- Undo (Phase 14A) -----------------------------------------------------
+/**
+ * The user's whole EDIT state, deep-copied — one entry on the undo stack.
+ *   manual   — the hand-placed markers, per channel.
+ *   excluded — the pruned auto-detections, per channel, as index ARRAYS (a Set isn't
+ *              worth keeping here; we rebuild it on restore).
+ *   roi      — the ROI's rotate/move transform ({angle,dx,dy}).
+ * Nothing else is undoable: sliders, colours, visibility and file loads are either
+ * trivially re-set or are whole-state changes where undo would surprise more than help.
+ */
+function editSnapshot() {
+  return {
+    manual: manualMarkers.getSnapshot(),
+    excluded: Object.fromEntries(CHANNELS.map((c) => [c.key, [...excludedCells[c.key]]])),
+    roi: roiControls.getTransform(),
+  };
+}
+
+/**
+ * Restore a snapshot, then refresh ONCE. Every piece of state goes back first and the
+ * repaint/re-detect happens at the end — restoring piecemeal would re-detect against a
+ * half-restored state.
+ * recolocalize() is not optional here: an un-excluded cell has to rejoin the co-loc
+ * combos, and a removed manual marker has to leave them, or the chips and the
+ * headline would disagree with the overlay.
+ *
+ * The ROI transform (Phase 14B) is the expensive half. Restoring it moves the AOI mask,
+ * which is a detection GATE — so it needs a re-rasterise, a boundary redraw AND a worker
+ * round-trip. That only happens when the transform actually differs: a marker-only undo
+ * must stay a pure repaint, so we compare the three numbers rather than re-detecting
+ * unconditionally.
+ */
+function restoreEdit(snap) {
+  manualMarkers.restore(snap.manual);
+  for (const c of CHANNELS) {
+    const set = excludedCells[c.key];
+    set.clear();
+    for (const i of snap.excluded[c.key] || []) set.add(i);
+  }
+
+  const roiMoved = roi && dims && !sameTransform(snap.roi, roiControls.getTransform());
+  if (roiMoved) {
+    roiControls.setTransform(snap.roi);
+    applyRoi(); // re-rasterise the mask at the restored transform
+    drawAoiBoundary(layers.aoiCtx, maskMatrix, dims.width, dims.height);
+  }
+
+  recolocalize();
+  renderMarkers();
+  updateCounts();
+  updateResultAvailability();
+
+  // Last: the mask gate moved, so the detected cells themselves are now wrong. The
+  // worker's reply repaints and re-counts again — that second pass is the authoritative
+  // one, and it also clears the exclusions we just restored (their indices point into
+  // results that are about to be replaced; see the staleness rule in worker.onmessage).
+  if (roiMoved) runDetection();
+}
+
+/** Do two ROI transforms describe the same position/rotation? (undo is a no-op if so) */
+function sameTransform(a, b) {
+  if (!a || !b) return !a === !b;
+  const near = (p, q) => Math.abs(p - q) < 1e-6;
+  return near(a.angle, b.angle) && near(a.dx, b.dx) && near(a.dy, b.dy);
+}
+
+/** Ctrl+Z / the "Undo" button: step back one edit. No-op when the stack is empty. */
+function undoEdit() {
+  const prev = history.undo(editSnapshot());
+  if (prev) restoreEdit(prev);
+}
+
+/** Ctrl+Shift+Z / Ctrl+Y / the "Redo" button: step forward again. No-op when empty. */
+function redoEdit() {
+  const next = history.redo(editSnapshot());
+  if (next) restoreEdit(next);
+}
+
+/** True when there is any marker edit to undo — used to skip a no-op "Reset" entry. */
+function hasMarkerEdits() {
+  return manualMarkers.total() > 0 || CHANNELS.some((c) => excludedCells[c.key].size > 0);
+}
+
+// Ctrl+Z / Cmd+Z → undo; Ctrl+Shift+Z or Ctrl+Y → redo.
+createEditShortcuts({ onUndo: () => undoEdit(), onRedo: () => redoEdit() });
 
 /**
  * Per-channel EFFECTIVE cells = detected (exclusions removed) PLUS the channel's

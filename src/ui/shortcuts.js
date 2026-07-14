@@ -32,6 +32,39 @@ export function createChannelShortcuts({ keyMap, isLoaded = () => true, toggle }
   return { destroy: () => target.removeEventListener('keydown', onKeydown) };
 }
 
+/**
+ * Undo/redo keys (Phase 14A) — Ctrl+Z / Cmd+Z, and Ctrl+Shift+Z / Ctrl+Y for redo.
+ *
+ * A SEPARATE listener from createChannelShortcuts on purpose: that one returns early
+ * whenever Ctrl/Meta is held (it deliberately leaves modifier combos to the browser),
+ * so undo can't be a branch inside it.
+ *
+ * Typing guard: inside a text field (e.g. the ROI rotation input) Ctrl+Z must stay the
+ * browser's NATIVE text undo — we don't preventDefault there, and we don't undo.
+ *
+ * @param {Object} deps
+ * @param {() => void} deps.onUndo
+ * @param {() => void} [deps.onRedo] - wired in Phase 14B; harmless to leave unset.
+ * @param {Document|HTMLElement} [target]
+ * @returns {{ destroy: () => void }}
+ */
+export function createEditShortcuts({ onUndo, onRedo = () => {} }, target = document) {
+  function onKeydown(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (isTypingTarget(e.target)) return; // let the field handle its own undo
+    const key = e.key.toLowerCase();
+    if (key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      onUndo();
+    } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+      e.preventDefault();
+      onRedo();
+    }
+  }
+  target.addEventListener('keydown', onKeydown);
+  return { destroy: () => target.removeEventListener('keydown', onKeydown) };
+}
+
 /** True when focus is in a control that should receive the keystroke itself. */
 export function isTypingTarget(node) {
   if (!node) return false;

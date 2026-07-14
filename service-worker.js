@@ -25,7 +25,7 @@
  * worker intercepts its fetch too, so without it detection breaks offline.
  */
 
-const VERSION = '0.1.02';
+const VERSION = '0.1.04';
 const CACHE = `itcn-${VERSION}`;
 
 const ASSETS = [
@@ -49,6 +49,7 @@ const ASSETS = [
   './src/algorithm/threshold.js',
   './src/core/channelExtract.js',
   './src/core/fileLoader.js',
+  './src/core/history.js',
   './src/core/imageDecoder.js',
   './src/core/rasterize.js',
   './src/core/roiParser.js',

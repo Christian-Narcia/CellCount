@@ -23,6 +23,14 @@
  * Exclusivity: turning this tool on calls `onActivate` (so the caller can switch
  * off the ROI "Move" tool, which shares the same canvas), and the tool exposes
  * `deactivate()` so it can be switched off symmetrically.
+ *
+ * Undo (Phase 14A): the tool does NOT own the history stack (main.js does — it's the
+ * only module that can see the exclusions and the ROI transform too). It just calls
+ * `onBeforeChange(kind)` immediately BEFORE it mutates anything, which is main's cue
+ * to snapshot the pre-edit state. That timing is the whole point: `onChange` fires
+ * AFTER the mutation, so snapshotting there would capture the post-edit state and the
+ * undo would be a no-op. It also hosts the "Undo" button (setCanUndo() drives its
+ * enabled state) so the button sits with the edit tools it belongs to.
  */
 
 const HIT_PX = 8; // click-to-remove tolerance, in SCREEN px
@@ -44,6 +52,12 @@ const DRAG_PX = 4; // movement above this is treated as a drag, not a click
  *        - called to exclude the auto-detected marker at `index` in `channelKey`.
  * @param {() => void} [deps.onReset] - called when "Reset" is clicked (after the
  *        manual lists are cleared) so the caller can clear its exclusions + refresh.
+ * @param {(kind: 'edit'|'reset') => void} [deps.onBeforeChange] - fired immediately
+ *        BEFORE any mutation (add / remove / exclude / reset), so the caller can
+ *        snapshot the pre-edit state for undo. Never fired for a click that changes
+ *        nothing (e.g. empty space with no channel selected) — no no-op undo steps.
+ * @param {() => void} [deps.onUndo] - "Undo" button clicked (same action as Ctrl+Z).
+ * @param {() => void} [deps.onRedo] - "Redo" button clicked (same action as Ctrl+Shift+Z).
  */
 export function createManualMarkers(container, {
   canvas,
@@ -53,6 +67,9 @@ export function createManualMarkers(container, {
   getDetectedMarkers = () => ({}),
   onExcludeDetected = () => {},
   onReset = () => {},
+  onBeforeChange = () => {},
+  onUndo = () => {},
+  onRedo = () => {},
 }) {
   /** Per-channel marker lists, keyed by channel id. @type {Record<string, Array<{x:number,y:number}>>} */
   const markers = Object.fromEntries(channels.map((c) => [c.key, []]));
@@ -81,6 +98,22 @@ export function createManualMarkers(container, {
     activeChannel = select.value;
   });
 
+  // Undo/Redo drive the caller's history stack, which covers ROI move/rotate too — so
+  // the titles say "edit", not "marker edit".
+  const undo = el('button', 'manual-tools__undo btn-secondary');
+  undo.type = 'button';
+  undo.textContent = 'Undo';
+  undo.title = 'Undo the last edit (Ctrl+Z)';
+  undo.disabled = true;
+  undo.addEventListener('click', () => onUndo());
+
+  const redo = el('button', 'manual-tools__redo btn-secondary');
+  redo.type = 'button';
+  redo.textContent = 'Redo';
+  redo.title = 'Redo the last undone edit (Ctrl+Shift+Z)';
+  redo.disabled = true;
+  redo.addEventListener('click', () => onRedo());
+
   const reset = el('button', 'manual-tools__reset btn-secondary');
   reset.type = 'button';
   reset.textContent = 'Reset';
@@ -89,11 +122,14 @@ export function createManualMarkers(container, {
     // Clears BOTH hand-placed markers and the caller's auto-detection exclusions,
     // so one button undoes every marker edit. onReset() does the caller-side clear
     // + refresh, so we don't also fire onChange (which would double-repaint).
+    // Snapshot FIRST — a Reset is the edit most likely to be an accident, and it's
+    // the one a single Ctrl+Z has to bring all the way back.
+    onBeforeChange('reset');
     for (const key of Object.keys(markers)) markers[key].length = 0;
     onReset();
   });
 
-  row.append(select, reset);
+  row.append(select, undo, redo, reset);
   container.append(btn, row);
 
   function setActive(on) {
@@ -129,9 +165,13 @@ export function createManualMarkers(container, {
     const { x, y, sx } = toImage(e);
     const tol = HIT_PX * sx; // screen tolerance → image px
 
+    // Each branch below snapshots (onBeforeChange) immediately before it mutates, so
+    // the caller's undo entry holds the state as it was BEFORE this click.
+
     // 1. A hand-placed marker (any channel) under the cursor → remove it.
     const manualHit = nearest(x, y, tol);
     if (manualHit) {
+      onBeforeChange('edit');
       markers[manualHit.key].splice(manualHit.index, 1);
       onChange();
       return;
@@ -139,11 +179,13 @@ export function createManualMarkers(container, {
     // 2. An auto-detected marker under the cursor → exclude it (caller-owned).
     const detHit = nearestDetected(x, y, tol);
     if (detHit) {
+      onBeforeChange('edit');
       onExcludeDetected(detHit.key, detHit.index);
       return;
     }
     // 3. Empty space → add a new marker for the selected channel.
     if (activeChannel) {
+      onBeforeChange('edit');
       markers[activeChannel].push({ x: Math.round(x), y: Math.round(y) });
       onChange();
     }
@@ -197,6 +239,38 @@ export function createManualMarkers(container, {
     count: (key) => (markers[key] ? markers[key].length : 0),
     /** Total manual markers across all channels. */
     total,
+
+    /**
+     * A DEEP copy of the per-channel lists, for the undo stack (Phase 14A).
+     * Deep matters: the lists above are handed out live and are mutated in place by
+     * every add/remove, so a shallow copy would alias them and the "snapshot" would
+     * silently track the very edits it exists to undo.
+     */
+    getSnapshot: () => Object.fromEntries(
+      Object.keys(markers).map((key) => [key, markers[key].map((m) => ({ x: m.x, y: m.y }))])
+    ),
+
+    /**
+     * Replace the lists from a snapshot (deep-copied back in, for the same reason).
+     * Deliberately does NOT fire onChange: the caller restores the marker lists, the
+     * exclusions and the ROI transform together and repaints ONCE, at the end.
+     */
+    restore(snap) {
+      for (const key of Object.keys(markers)) {
+        const list = (snap && snap[key]) || [];
+        markers[key] = list.map((m) => ({ x: m.x, y: m.y }));
+      }
+    },
+
+    /** Enable/disable the "Undo" button (the caller owns the history stack). */
+    setCanUndo(can) {
+      undo.disabled = !can;
+    },
+
+    /** Enable/disable the "Redo" button. */
+    setCanRedo(can) {
+      redo.disabled = !can;
+    },
     /** Remove all markers (e.g. the stage was cleared) and turn the tool off. */
     clear() {
       for (const key of Object.keys(markers)) markers[key].length = 0;

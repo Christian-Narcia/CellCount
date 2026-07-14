@@ -20,6 +20,15 @@
  * from reaching the viewport's pan handler; off, the canvas is transparent to
  * pointers again and panning works as before. Screen deltas are divided by the
  * current zoom scale to convert to image pixels.
+ *
+ * Undo (Phase 14B): a third callback, onBeforeTransform(), fires ONCE at the START
+ * of a gesture — pointerdown of a drag, the first keystroke of a burst of typing in
+ * the rotation field, or a Reset click. That's the caller's cue to snapshot the
+ * pre-gesture transform. Firing per UPDATE instead would be wrong in a way the user
+ * would feel immediately: onTransform runs on every animation frame of a drag, so one
+ * drag across the image would need sixty presses of Ctrl+Z to undo. The gesture state
+ * (dragging / mid-typing-burst) lives here, so the coalescing has to live here too —
+ * main.js can't see it.
  */
 
 /**
@@ -30,8 +39,17 @@
  * @param {() => void} deps.onTransform - live: re-rasterise + redraw boundary
  * @param {() => void} deps.onCommit - settled: re-run detection
  * @param {() => void} [deps.onActivate] - called when "Move ROI" turns ON
+ * @param {() => void} [deps.onBeforeTransform] - fired ONCE at the start of a gesture,
+ *        before the transform changes, so the caller can push an undo snapshot.
  */
-export function createRoiControls(container, { moveTarget, getScale, onTransform, onCommit, onActivate = () => {} }) {
+export function createRoiControls(container, {
+  moveTarget,
+  getScale,
+  onTransform,
+  onCommit,
+  onActivate = () => {},
+  onBeforeTransform = () => {},
+}) {
   let angle = 0;
   let dx = 0;
   let dy = 0;
@@ -81,13 +99,24 @@ export function createRoiControls(container, { moveTarget, getScale, onTransform
     });
   }
   let commitTimer = null;
+  let typing = false; // mid-burst in the rotation field — see the rotation handler
   function fireCommit(delay = 0) {
     clearTimeout(commitTimer);
-    commitTimer = setTimeout(onCommit, delay);
+    commitTimer = setTimeout(() => {
+      typing = false; // the burst has settled; the next keystroke starts a new gesture
+      onCommit();
+    }, delay);
   }
 
   // ---- Rotation ----
   rotInput.addEventListener('input', () => {
+    // Snapshot once per BURST of typing, not per keystroke: typing "45" is one edit
+    // and must be one Ctrl+Z, not two (4 → 45). The burst ends when the same debounce
+    // that drives the re-detect fires.
+    if (!typing) {
+      typing = true;
+      onBeforeTransform();
+    }
     const v = Number(rotInput.value);
     angle = Number.isFinite(v) ? v : 0;
     fireTransform();
@@ -96,6 +125,8 @@ export function createRoiControls(container, { moveTarget, getScale, onTransform
 
   // ---- Reset ----
   resetBtn.addEventListener('click', () => {
+    if (angle === baseRotation && dx === 0 && dy === 0) return; // already reset — no-op
+    onBeforeTransform();
     angle = baseRotation;
     dx = 0;
     dy = 0;
@@ -122,6 +153,7 @@ export function createRoiControls(container, { moveTarget, getScale, onTransform
   moveTarget.addEventListener('pointerdown', (e) => {
     if (!moveMode) return;
     e.stopPropagation(); // keep the viewport from starting a pan
+    onBeforeTransform(); // ONE undo entry per drag — snapshot the pre-drag transform
     dragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
@@ -165,6 +197,27 @@ export function createRoiControls(container, { moveTarget, getScale, onTransform
     /** Current transform — the single source of truth main.js rasterises from. */
     getTransform() {
       return { angle, dx, dy };
+    },
+
+    /**
+     * Put the transform back to a snapshotted value (undo/redo, Phase 14B).
+     *
+     * Updates the rotation FIELD as well as the internal angle: this panel is the
+     * single source of truth, so leaving the input showing the pre-undo angle would
+     * desync it — and the user would hit that the moment they typed in it next (the
+     * field's value, not the restored angle, is what the next keystroke edits).
+     *
+     * Fires NO callbacks. main.js re-rasterises, redraws the boundary and re-detects
+     * once, after the whole snapshot (markers, exclusions, transform) is back in
+     * place — restoring piecemeal would re-detect against a half-restored state.
+     */
+    setTransform(t) {
+      if (!t) return;
+      angle = Number.isFinite(t.angle) ? t.angle : 0;
+      dx = Number.isFinite(t.dx) ? t.dx : 0;
+      dy = Number.isFinite(t.dy) ? t.dy : 0;
+      rotInput.value = String(round(angle));
+      typing = false; // an undo ends any in-progress typing burst
     },
     /** Turn "Move ROI" off (exclusivity with the manual-marker tool). */
     deactivate() {
