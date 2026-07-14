@@ -21,7 +21,7 @@
  *                 across channels is the next phase.
  */
 
-import { DEFAULT_PARAMS, CHANNELS, ROI_INPUT, APP_VERSION } from './config.js';
+import { DEFAULT_PARAMS, CHANNELS, ROI_INPUT, APP_VERSION, MARKER_STYLE } from './config.js';
 import { decodeFile } from './core/imageDecoder.js';
 import { colocalize, colocalizationByCell, colocalizeAll } from './algorithm/colocalize.js';
 import { extractChannel, maskCoverage, sameSize } from './core/channelExtract.js';
@@ -32,6 +32,7 @@ import { initChannelInputs } from './ui/channelInputs.js';
 import { createRoiControls } from './ui/roiControls.js';
 import { createManualMarkers } from './ui/manualMarkers.js';
 import { createMarkerStyle } from './ui/markerStyle.js';
+import { createLabelToggle } from './ui/labelToggle.js';
 import { buildComposite } from './ui/composite.js';
 import { createCanvasLayers } from './ui/canvasLayers.js';
 import { drawAoiBoundary } from './ui/aoiBoundary.js';
@@ -50,6 +51,7 @@ const el = {
   roiControls: document.getElementById('roi-controls'),
   manualTools: document.getElementById('manual-tools'),
   markerTools: document.getElementById('marker-tools'),
+  labelTools: document.getElementById('label-tools'),
   placeholder: document.getElementById('stage-placeholder'),
   baseCanvas: document.getElementById('base-canvas'),
   aoiCanvas: document.getElementById('aoi-canvas'),
@@ -129,6 +131,13 @@ const manualMarkers = createManualMarkers(el.manualTools, {
 // Per-channel marker SHAPE toggle (dots vs rings). Display-only: a change just
 // repaints the overlay (no re-detection), same path as a colour change.
 const markerStyle = createMarkerStyle(el.markerTools, {
+  onChange: () => renderMarkers(),
+});
+
+// Number-label toggle (button + the H key). Display-only, and narrower than the
+// shape toggle: it drops the numbers beside the markers, leaving the markers
+// themselves untouched. Same repaint-only path as above.
+const labelToggle = createLabelToggle(el.labelTools, {
   onChange: () => renderMarkers(),
 });
 
@@ -609,7 +618,11 @@ function renderMarkers() {
       labelStart: includedFor(c.key).length + 1,
     });
   }
-  drawMarkerGroups(layers.overlayCtx, groups, controls.getParams().R);
+  // The label toggle is the only per-render override of the marker appearance.
+  drawMarkerGroups(layers.overlayCtx, groups, controls.getParams().R, {
+    ...MARKER_STYLE,
+    showLabels: labelToggle.getShowLabels(),
+  });
 }
 
 /**

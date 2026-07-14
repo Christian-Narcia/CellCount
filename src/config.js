@@ -15,7 +15,7 @@
  * where there is no service worker at all (opened over file://). Keeping it in step
  * with the worker is cosmetic, not functional.
  */
-export const APP_VERSION = '0.1.011';
+export const APP_VERSION = '0.1.02';
 
 /** Detection parameters (also the initial slider values). */
 export const DEFAULT_PARAMS = Object.freeze({
@@ -235,6 +235,19 @@ export const MARKER_STYLES = Object.freeze({
     { value: 'dots', label: 'Dots' },
     { value: 'rings', label: 'Rings' },
   ],
+});
+
+/**
+ * Number-label toggle — a DISPLAY-only switch for the numeric labels drawn next to
+ * the detection / manual markers (overlay.js reads MARKER_STYLE.showLabels). Hiding
+ * them leaves every marker exactly as it was; it only removes the numbers, so dense
+ * images stay readable. `shortcutKey` is the keyboard key that flips it, and it is
+ * shown in the button's own name. See ui/labelToggle.js.
+ */
+export const MARKER_LABELS = Object.freeze({
+  /** Labels start visible. */
+  default: true,
+  shortcutKey: 'h',
 });
 
 /**

@@ -47,7 +47,9 @@ body {
   gap: 8px 16px;
 }
 .app-header__tools .manual-tools,
-.app-header__tools .marker-tools { margin: 0; }
+.app-header__tools .marker-tools,
+.app-header__tools .label-tools { margin: 0; }
+.app-header__tools .label-tools__btn { width: auto; }
 .app-header__tools .manual-tools { display: flex; align-items: center; gap: 8px; }
 .app-header__tools .manual-tools__btn { width: auto; }
 .app-header__tools .manual-tools__row { margin-top: 0; }
@@ -217,6 +219,16 @@ body {
 
 /* Marker-style tool (Phase 11) — "Marker style" dots/rings toggle (display-only). */
 .marker-tools { margin-bottom: 10px; }
+
+/* Number-label tool — "Hide numbers (H)" toggle (display-only). Highlighted while
+   the labels are hidden, matching the "Add markers" active look. */
+.label-tools { margin-bottom: 10px; }
+.label-tools__btn { width: 100%; }
+.label-tools__btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0, 229, 255, 0.08);
+}
 
 .control { display: flex; flex-direction: column; gap: 6px; }
 .control label {

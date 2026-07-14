@@ -33,7 +33,7 @@ export function createChannelShortcuts({ keyMap, isLoaded = () => true, toggle }
 }
 
 /** True when focus is in a control that should receive the keystroke itself. */
-function isTypingTarget(node) {
+export function isTypingTarget(node) {
   if (!node) return false;
   const tag = node.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node.isContentEditable;

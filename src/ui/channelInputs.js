@@ -76,7 +76,12 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
     const swatch = el('span', 'channel-slot__swatch');
     const text = el('div', 'channel-slot__text');
     const label = el('span', 'channel-slot__label');
-    label.textContent = def.label;
+    // The channel's visibility shortcut (config `shortcutKey`, e.g. R/G/B/Y) is shown
+    // in the slot's name — "Red channel (R)" — so the key is discoverable without a
+    // legend. Display only: the config `label` stays clean for exports/results.
+    label.textContent = def.shortcutKey
+      ? `${def.label} (${def.shortcutKey.toUpperCase()})`
+      : def.label;
     const status = el('span', 'channel-slot__status');
     status.textContent = 'drop file or click';
     text.append(label, status);
@@ -128,7 +133,9 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
       const eye = el('input');
       eye.type = 'checkbox';
       eye.checked = style.visible;
-      eye.title = 'Visible in composite';
+      eye.title = def.shortcutKey
+        ? `Visible in composite (shortcut: ${def.shortcutKey.toUpperCase()})`
+        : 'Visible in composite';
       eye.addEventListener('change', () => {
         style.visible = eye.checked;
         slot.classList.toggle('is-hidden', !eye.checked);

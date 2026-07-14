@@ -23,7 +23,10 @@
  *                        channel's detected sequence (detected 1…N, manual N+1…).
  * A group may carry its own `radius` (Co-R for 'dot' groups; channel R for 'cell'
  * rings) and `labelStart` ('manual' groups); other kinds ignore them.
- * Appearance defaults come from config (MARKER_STYLE).
+ * Appearance defaults come from config (MARKER_STYLE). The number labels are drawn
+ * only when `style.showLabels` is true — main.js feeds that in from the user's
+ * "Hide numbers (H)" toggle (ui/labelToggle.js), so hiding the numbers leaves every
+ * marker shape/colour exactly as it was.
  */
 
 import { MARKER_STYLE } from '../config.js';
