@@ -820,9 +820,20 @@ function setStatus(message, isError = false) {
   el.status.classList.toggle('is-error', isError);
 }
 
-if (el.appVersion) el.appVersion.textContent = `Version ${APP_VERSION}`;
+function showVersion(version) {
+  if (el.appVersion) el.appVersion.textContent = `Version ${version}`;
+}
+
+showVersion(APP_VERSION);
 setStatus('Load one or more channels to begin.');
 console.info(`ITCN Cell Counter v${APP_VERSION} ready. Default params:`, DEFAULT_PARAMS);
 
-// Register the service worker for offline support + surface update banner.
-registerPWA();
+// Register the service worker for offline support + surface update banner. The
+// version it reports back is the one actually SERVING this page, which is the only
+// trustworthy number once a cached build is involved — see pwa.js. APP_VERSION
+// above is just the placeholder until that round-trip completes.
+registerPWA((version) => {
+  if (!version || version === APP_VERSION) return;
+  showVersion(version);
+  console.info(`Served by service worker v${version} (bundle says v${APP_VERSION}).`);
+});

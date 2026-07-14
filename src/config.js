@@ -5,8 +5,17 @@
  * that changing a default never requires hunting through the codebase.
  */
 
-/** Tool version, shown in the panel footer. Bump on release. */
-export const APP_VERSION = '0.1.103';
+/**
+ * Tool version, shown in the panel footer.
+ *
+ * NOT the release switch — bump VERSION in service-worker.js instead; that is what
+ * ships a new build and what the footer ultimately displays (main.js overwrites the
+ * footer with the version reported by the worker actually serving the page). This
+ * constant is only the value shown before that round-trip finishes, and the fallback
+ * where there is no service worker at all (opened over file://). Keeping it in step
+ * with the worker is cosmetic, not functional.
+ */
+export const APP_VERSION = '0.1.01';
 
 /** Detection parameters (also the initial slider values). */
 export const DEFAULT_PARAMS = Object.freeze({

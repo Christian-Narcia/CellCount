@@ -7,23 +7,39 @@
  * resulting `controllerchange` reloads the page onto the fresh version. This is
  * the user-facing mechanism for picking up a new build — no manual cache clear.
  *
+ * ── WHERE THE VERSION LIVES ───────────────────────────────────────────────────
+ * In service-worker.js, and NOWHERE else. Every file in this directory is served
+ * cache-first from the old cache, so a version constant here (or in config.js)
+ * would be read from the STALE copy — the page would keep asking for the build it
+ * already has and no update could ever be detected. The worker script is the only
+ * file the browser always re-fetches from the network, so it is the only file whose
+ * contents can announce a new release. We register it with updateViaCache:'none' so
+ * the HTTP cache (GitHub Pages sends a ~10-min max-age) can't stale it either, then
+ * ask the ACTIVE worker which version it is and hand that back via `onVersion` for
+ * the footer — the number on screen is then, by construction, the build serving you.
+ *
  * Display-only and self-contained: import + call registerPWA() from main.js.
  * A no-op when service workers are unavailable (e.g. non-secure context).
  */
 
-import { APP_VERSION } from './config.js';
-
-export function registerPWA() {
+/**
+ * @param {(version: string) => void} [onVersion] Called with the version of the
+ *   worker actually controlling the page (may fire after first paint).
+ */
+export function registerPWA(onVersion) {
   if (!('serviceWorker' in navigator)) return;
 
   window.addEventListener('load', () => {
-    // The version rides in the SW URL's query string. Bumping APP_VERSION in
-    // config.js therefore changes the registered script URL, which the browser
-    // treats as a NEW worker — it installs, activates, drops the old cache, and
-    // triggers the update banner below. So config.js is the SINGLE place to bump.
     navigator.serviceWorker
-      .register(`./service-worker.js?v=${encodeURIComponent(APP_VERSION)}`)
+      .register('./service-worker.js', { updateViaCache: 'none' })
       .then((reg) => {
+        // Ask whichever worker ends up in control what build it is.
+        if (onVersion) {
+          navigator.serviceWorker.ready.then((ready) => {
+            if (ready.active) requestVersion(ready.active).then(onVersion);
+          });
+        }
+
         // A build was already waiting before this page finished loading.
         if (reg.waiting && navigator.serviceWorker.controller) {
           showUpdateBanner(reg.waiting);
@@ -38,6 +54,12 @@ export function registerPWA() {
               showUpdateBanner(incoming);
             }
           });
+        });
+
+        // The browser only checks for a new worker on navigation. A tab left open
+        // for days would never notice a release, so re-check when it regains focus.
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
         });
       })
       .catch((err) => console.warn('Service worker registration failed:', err));
@@ -54,6 +76,20 @@ export function registerPWA() {
       window.location.reload();
     });
   });
+}
+
+/** Round-trip the worker's VERSION over a MessageChannel. Resolves to '' on silence. */
+function requestVersion(worker) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const done = (value) => {
+      channel.port1.onmessage = null;
+      resolve(value);
+    };
+    channel.port1.onmessage = (event) => done((event.data && event.data.version) || '');
+    worker.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+    setTimeout(() => done(''), 2000);
+  }).then((version) => version || undefined);
 }
 
 function showUpdateBanner(worker) {
