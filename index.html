@@ -5,8 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ITCN Cell Counter</title>
     <link rel="stylesheet" href="./css/styles.css" />
-    <!-- UTIF: TIFF decoding (8-bit & 16-bit). Loaded as a global for imageDecoder.js -->
-    <script src="https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js"></script>
+
+    <!-- PWA: installable + offline. Manifest + theme + home-screen icons. -->
+    <link rel="manifest" href="./manifest.json" />
+    <meta name="theme-color" content="#0b0e14" />
+    <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
+    <!-- UTIF: TIFF decoding (8-bit & 16-bit). Loaded as a global for imageDecoder.js.
+         Bundled locally (vendor/) rather than a CDN so it is cached same-origin and
+         works offline — see service-worker.js. -->
+    <script src="./vendor/utif.js"></script>
   </head>
   <body>
     <header class="app-header">

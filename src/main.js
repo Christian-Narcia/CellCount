@@ -42,6 +42,7 @@ import { createResultsModal } from './ui/resultsTable.js';
 import { createChannelShortcuts } from './ui/shortcuts.js';
 import { downloadCsv } from './export/csv.js';
 import { downloadPng } from './export/png.js';
+import { registerPWA } from './pwa.js';
 
 // ---- DOM references -------------------------------------------------------
 const el = {
@@ -822,3 +823,6 @@ function setStatus(message, isError = false) {
 if (el.appVersion) el.appVersion.textContent = `Version ${APP_VERSION}`;
 setStatus('Load one or more channels to begin.');
 console.info(`ITCN Cell Counter v${APP_VERSION} ready. Default params:`, DEFAULT_PARAMS);
+
+// Register the service worker for offline support + surface update banner.
+registerPWA();
