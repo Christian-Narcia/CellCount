@@ -15,7 +15,7 @@
  * where there is no service worker at all (opened over file://). Keeping it in step
  * with the worker is cosmetic, not functional.
  */
-export const APP_VERSION = '0.1.01';
+export const APP_VERSION = '0.1.011';
 
 /** Detection parameters (also the initial slider values). */
 export const DEFAULT_PARAMS = Object.freeze({
