@@ -5,103 +5,88 @@
  * so adding a new tunable is a one-line change in config.js — no HTML edits and no
  * changes here.
  *
- * PER-CHANNEL TUNING (Phase 9). Sliders flagged `perChannel` in config can be set
- * independently per channel. A "Link channels" toggle swaps the UI between two
- * mutually-exclusive layouts:
- *   • LINKED (default) — one shared slider per per-channel param drives every
- *     channel. The per-channel groups are hidden.
- *   • UNLINKED         — the shared per-channel sliders are hidden and each
- *     channel gets its own R/Dmin/T group.
- * Non-per-channel controls (Co-R, threshold mode, fluorescent) are always shared
- * and always visible. On UNLINK, every channel's group is seeded from the current
- * shared values so detection doesn't jump.
+ * PER-CHANNEL TUNING (Phase 9). Sliders flagged `perChannel` in config are tuned
+ * independently per channel — there is no shared/linked mode. Every channel gets
+ * its own R/Dmin/T group, seeded from that channel's CHANNELS[*].params defaults.
+ * Each group has a LOCK button (top-right); locking disables that group's sliders
+ * so the defaults can't be moved by accident (a UI guard only — it never changes
+ * the values). Non-per-channel controls (Co-R, threshold mode, fluorescent) are
+ * always global.
  *
- * onChange payload: { params, channelParams, linked }
- *   • params        — the global/shared params (the linked values + Co-R + mode +
+ * onChange payload: { params, channelParams }
+ *   • params        — the global params (base R/Dmin/T + Co-R + mode +
  *                     fluorescent). DEFAULT_PARAMS shape.
- *   • channelParams — { [channelKey]: { R, Dmin, T } } per-channel overrides,
- *                     applied over `params` only when !linked.
- *   • linked        — boolean.
+ *   • channelParams — { [channelKey]: { R, Dmin, T } } per-channel values, always
+ *                     applied over `params` (see getChannelParams).
  */
 
-import { SLIDERS, SELECTS, TOGGLES, DEFAULT_PARAMS, CHANNELS, LINK_DEFAULT, thresholdRange } from '../config.js';
+import { SLIDERS, SELECTS, TOGGLES, DEFAULT_PARAMS, CHANNELS, LOCK_DEFAULT, thresholdRange } from '../config.js';
 
 /** Sliders that support independent per-channel values. */
 const PER_CHANNEL_SLIDERS = SLIDERS.filter((s) => s.perChannel);
 
 /**
  * @param {HTMLElement} container
- * @param {(payload: { params: object, channelParams: object, linked: boolean }) => void} onChange
+ * @param {(payload: { params: object, channelParams: object }) => void} onChange
  *        called (debounced) on any change
  * @returns {{
  *   getParams: () => object,
  *   setParams: (p: object) => void,
  *   getChannelParams: (key: string) => object,
- *   isLinked: () => boolean,
  * }}
  */
 export function initControls(container, onChange) {
   const params = { ...DEFAULT_PARAMS };
-  let linked = LINK_DEFAULT;
 
-  // Per-channel overrides, seeded from the shared defaults. Only the per-channel
-  // slider keys live here; everything else is read from `params`.
+  // Per-channel values, seeded from each channel's own CHANNELS[*].params
+  // defaults (falling back to the global defaults for anything omitted). Only the
+  // per-channel slider keys live here; everything else is read from `params`.
   /** @type {Record<string, Record<string, number>>} */
   const channelParams = {};
   for (const c of CHANNELS) {
     channelParams[c.key] = {};
-    for (const s of PER_CHANNEL_SLIDERS) channelParams[c.key][s.key] = params[s.key];
+    for (const s of PER_CHANNEL_SLIDERS) {
+      channelParams[c.key][s.key] = (c.params && c.params[s.key] != null) ? c.params[s.key] : params[s.key];
+    }
   }
 
-  // References to the per-channel slider widgets so UNLINK can sync their values
-  // to the shared sliders. chWidgets[channelKey][paramKey] = { input, value }.
+  // References to the per-channel slider widgets so the threshold re-range can
+  // update them. chWidgets[channelKey][paramKey] = { input, value }.
   /** @type {Record<string, Record<string, { input: HTMLInputElement, value: HTMLElement }>>} */
   const chWidgets = {};
-  // Shared per-channel slider widgets, keyed by param, so we can hide them when
-  // unlinked and read their values back on link.
-  /** @type {Record<string, { input: HTMLInputElement, value: HTMLElement }>} */
-  const sharedPerChannelWidgets = {};
 
-  // ---- Shared sliders ----
-  // Per-channel-capable sliders are wrapped so they can be hidden when unlinked;
-  // plain sliders (Co-R) are always visible.
+  // ---- Shared sliders (non-per-channel only, e.g. Co-R) ----
+  // Per-channel sliders live in their own groups below, never as a shared slider.
   for (const def of SLIDERS) {
+    if (def.perChannel) continue;
     const wrap = el('div', 'control');
-    if (def.perChannel) wrap.classList.add('control--linked');
-
     const w = buildSlider(def, params[def.key], (v) => {
       params[def.key] = v;
-      // While linked, keep the overrides mirrored so an UNLINK starts from here.
-      if (def.perChannel && linked) {
-        for (const c of CHANNELS) channelParams[c.key][def.key] = v;
-      }
       emit();
     });
     wrap.append(w.label, w.input);
     container.appendChild(wrap);
-    if (def.perChannel) sharedPerChannelWidgets[def.key] = w;
   }
 
-  // ---- Link toggle + per-channel groups ----
-  // Only meaningful when there is something to tune per channel.
-  let perChannelWrap = null;
+  // ---- Per-channel groups (each independently tunable + lockable) ----
+  /** Locked flag per channel key. */
+  const lockState = {};
+  /** @type {Record<string, HTMLButtonElement>} */
+  const lockButtons = {};
   if (PER_CHANNEL_SLIDERS.length && CHANNELS.length) {
-    const linkWrap = el('div', 'control control--toggle');
-    const linkLabel = el('label');
-    const linkInput = el('input');
-    linkInput.type = 'checkbox';
-    linkInput.checked = linked;
-    linkLabel.append(linkInput, document.createTextNode(' Link channels (shared R/Dmin/T)'));
-    linkWrap.appendChild(linkLabel);
-    container.appendChild(linkWrap);
-
-    perChannelWrap = el('div', 'per-channel');
+    const perChannelWrap = el('div', 'per-channel');
     for (const c of CHANNELS) {
       const group = el('div', 'per-channel__group');
+
+      const header = el('div', 'per-channel__header');
       const heading = el('div', 'per-channel__heading');
       heading.textContent = c.label;
-      if (c.defaultColor) heading.style.setProperty('--slot-color', c.defaultColor);
-      group.appendChild(heading);
+      if (c.defaultColor) {
+        group.style.setProperty('--slot-color', c.defaultColor);
+        heading.style.setProperty('--slot-color', c.defaultColor);
+      }
+      header.append(heading, buildLockButton(c.key));
+      group.appendChild(header);
 
       chWidgets[c.key] = {};
       for (const def of PER_CHANNEL_SLIDERS) {
@@ -115,29 +100,40 @@ export function initControls(container, onChange) {
         chWidgets[c.key][def.key] = w;
       }
       perChannelWrap.appendChild(group);
+      applyLock(c.key, LOCK_DEFAULT);
     }
     container.appendChild(perChannelWrap);
-
-    linkInput.addEventListener('change', () => {
-      linked = linkInput.checked;
-      // Seed per-channel sliders from the shared values so detection is continuous.
-      if (!linked) {
-        for (const c of CHANNELS) {
-          for (const def of PER_CHANNEL_SLIDERS) {
-            const v = params[def.key];
-            channelParams[c.key][def.key] = v;
-            const w = chWidgets[c.key][def.key];
-            w.input.value = v;
-            w.value.textContent = `${v}${def.unit || ''}`;
-          }
-        }
-      }
-      applyLinkVisibility();
-      emit();
-    });
   }
 
-  applyLinkVisibility();
+  /**
+   * Build the lock button for a channel group. Clicking it toggles the locked
+   * state, which disables/enables that group's sliders (a UI guard only — the
+   * values are untouched, so no emit() is needed).
+   */
+  function buildLockButton(key) {
+    const btn = el('button', 'lock-btn');
+    btn.type = 'button';
+    btn.addEventListener('click', () => applyLock(key, !lockState[key]));
+    lockButtons[key] = btn;
+    return btn;
+  }
+
+  /** Apply a locked/unlocked state to one channel group (button label + slider disabling). */
+  function applyLock(key, locked) {
+    lockState[key] = locked;
+    const btn = lockButtons[key];
+    if (btn) {
+      btn.classList.toggle('is-locked', locked);
+      btn.setAttribute('aria-pressed', String(locked));
+      btn.title = locked ? 'Unlock parameters' : 'Lock parameters';
+      btn.setAttribute('aria-label', btn.title);
+      btn.innerHTML = locked ? LOCK_ICON : UNLOCK_ICON;
+    }
+    for (const def of PER_CHANNEL_SLIDERS) {
+      const w = chWidgets[key] && chWidgets[key][def.key];
+      if (w) w.input.disabled = locked;
+    }
+  }
 
   // ---- Selects (dropdowns) — always shared ----
   for (const def of SELECTS) {
@@ -185,19 +181,18 @@ export function initControls(container, onChange) {
   }
 
   /**
-   * Re-range every T slider (shared + per-channel) when the threshold mode
-   * changes, rescaling each current value to the SAME relative position in the
-   * new range so the knob never jumps to an extreme. Mutates `params.T` and the
-   * per-channel `channelParams[*].T` so the next emit() ships consistent values.
+   * Re-range every per-channel T slider when the threshold mode changes,
+   * rescaling each current value to the SAME relative position in the new range
+   * so the knob never jumps to an extreme. Mutates `params.T` (the base fallback)
+   * and each per-channel `channelParams[*].T` so the next emit() ships consistent
+   * values. Disabled (locked) sliders still re-range — only user dragging is
+   * blocked, not programmatic updates.
    */
   function rerangeThreshold(fromMode, toMode) {
     const from = thresholdRange(fromMode);
     const to = thresholdRange(toMode);
 
-    const newShared = rescaleToRange(params.T, from, to);
-    params.T = newShared;
-    const sharedT = sharedPerChannelWidgets.T;
-    if (sharedT) applySliderRange(sharedT, to, newShared);
+    params.T = rescaleToRange(params.T, from, to);
 
     for (const c of CHANNELS) {
       if (!channelParams[c.key] || !('T' in channelParams[c.key])) continue;
@@ -208,20 +203,12 @@ export function initControls(container, onChange) {
     }
   }
 
-  /** Show the shared per-channel sliders xor the per-channel groups. */
-  function applyLinkVisibility() {
-    for (const w of Object.values(sharedPerChannelWidgets)) {
-      w.input.closest('.control').hidden = !linked;
-    }
-    if (perChannelWrap) perChannelWrap.hidden = linked;
-  }
-
   // Debounce so dragging a slider doesn't fire dozens of detections.
   let timer = null;
   function emit() {
     clearTimeout(timer);
     timer = setTimeout(
-      () => onChange({ params: { ...params }, channelParams: cloneChannelParams(), linked }),
+      () => onChange({ params: { ...params }, channelParams: cloneChannelParams() }),
       120
     );
   }
@@ -232,12 +219,16 @@ export function initControls(container, onChange) {
   return {
     getParams: () => ({ ...params }),
     setParams: (p) => Object.assign(params, p),
-    isLinked: () => linked,
-    /** Resolved detection params for one channel: shared, with per-channel overrides when unlinked. */
-    getChannelParams: (key) =>
-      linked ? { ...params } : { ...params, ...(channelParams[key] || {}) },
+    /** Resolved detection params for one channel: global params + that channel's own R/Dmin/T. */
+    getChannelParams: (key) => ({ ...params, ...(channelParams[key] || {}) }),
   };
 }
+
+/** Inline lock-icon SVGs for the per-channel lock button (open = unlocked). */
+const LOCK_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+const UNLOCK_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-1.9"/></svg>';
 
 /**
  * Build a single labelled range slider. Returns the label + input nodes and the

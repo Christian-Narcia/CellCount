@@ -198,8 +198,8 @@ const COLOC_KEYS = CHANNELS.filter((c) => c.coloc).map((c) => c.key);
 const controls = initControls(el.controls, onParamsChange);
 
 /**
- * A signature of every channel's RESOLVED detection params (per-channel R/Dmin/T
- * when unlinked, shared otherwise, plus the global mode/fluorescent). Co-R is
+ * A signature of every channel's RESOLVED detection params (each channel's own
+ * R/Dmin/T plus the global mode/fluorescent). Co-R is
  * deliberately excluded — it only affects co-localization, not detection. If this
  * string changes we re-run the worker; if it doesn't, the change was Co-R (or a
  * display setting) and we just re-run the cheap co-localization pass.
@@ -216,7 +216,7 @@ const detectionSignature = () =>
  * A control changed. If any channel's detection params changed, re-run the
  * worker; otherwise (Co-R only) just re-run the cheap co-localization pass on the
  * existing per-channel results. Reads state straight from `controls`, so it works
- * the same whether the change was a shared, per-channel, or link-toggle event.
+ * the same whether the change was a per-channel slider or a global control.
  */
 function onParamsChange() {
   if (detectionSignature() !== lastDetectSig) {
@@ -474,7 +474,6 @@ function runDetection() {
       height: dims.height,
       params: controls.getParams(),
       channelParams,
-      linked: controls.isLinked(),
     },
     transfer
   );

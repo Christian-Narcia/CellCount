@@ -261,7 +261,6 @@ body {
 /* ---- Per-channel detection sliders (Phase 9) ---- */
 .per-channel { display: flex; flex-direction: column; gap: 14px; }
 .per-channel[hidden] { display: none; }
-.control--linked[hidden] { display: none; }
 .per-channel__group {
   display: flex;
   flex-direction: column;
@@ -272,12 +271,48 @@ body {
   border-left: 3px solid var(--slot-color, var(--panel-border));
   border-radius: 8px;
 }
+.per-channel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .per-channel__heading {
   --slot-color: var(--panel-border);
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-dim);
+}
+
+/* Lock button — top-right of each channel group. Locking disables that group's
+   sliders so the defaults can't be nudged by accident. */
+.lock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  cursor: pointer;
+  flex: none;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.lock-btn:hover { color: var(--text); border-color: var(--slot-color, var(--text-dim)); }
+.lock-btn.is-locked {
+  color: var(--slot-color, var(--accent));
+  border-color: var(--slot-color, var(--accent));
+  background: color-mix(in srgb, var(--slot-color, var(--accent)) 12%, transparent);
+}
+
+/* Locked group: sliders are disabled and visibly dimmed. */
+.per-channel__group input[type='range']:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .results {

@@ -8,24 +8,23 @@
  *                     channels: { r: ArrayBuffer|null, g, b, gray },  // Float32 grayscale
  *                     mask: ArrayBuffer|null,                          // Uint8 0/1
  *                     width, height,
- *                     params,                       // shared/global detection params
- *                     channelParams,                // { [key]: { R, Dmin, T } } overrides
- *                     linked                        // when true, ignore channelParams
+ *                     params,                       // global detection params
+ *                     channelParams,                // { [key]: { R, Dmin, T } } per-channel
  *                   }
  *                   (every non-null buffer is transferred — see main.js)
  *   Worker → Main:  { ok: true, perChannel: { r: cells, g: cells, ... }, took }
  *                |  { ok: false, error }
  *
- * PER-CHANNEL PARAMS (Phase 9): when `linked` is false, each channel's detection
- * runs with the shared `params` overridden by `channelParams[key]` (R/Dmin/T).
- * Linked, every channel uses `params` unchanged. The merge happens here so the
- * main thread only has to ship the overrides, not a fully-resolved set per channel.
+ * PER-CHANNEL PARAMS (Phase 9): every channel is detected with the global
+ * `params` overridden by that channel's `channelParams[key]` (R/Dmin/T). The
+ * merge happens here so the main thread only ships the per-channel values, not a
+ * fully-resolved set per channel.
  */
 
 import { detectChannel } from '../algorithm/detect.js';
 
 self.onmessage = (e) => {
-  const { channels, mask, width, height, params, channelParams, linked } = e.data;
+  const { channels, mask, width, height, params, channelParams } = e.data;
   try {
     const t0 = performance.now();
     const maskArr = mask ? new Uint8Array(mask) : null;
@@ -36,7 +35,7 @@ self.onmessage = (e) => {
       if (!buf) continue;
       const gray = new Float32Array(buf);
       const p =
-        !linked && channelParams && channelParams[key]
+        channelParams && channelParams[key]
           ? { ...params, ...channelParams[key] }
           : params;
       perChannel[key] = detectChannel(gray, width, height, p, maskArr);

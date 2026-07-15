@@ -15,7 +15,7 @@
  * where there is no service worker at all (opened over file://). Keeping it in step
  * with the worker is cosmetic, not functional.
  */
-export const APP_VERSION = '0.1.06';
+export const APP_VERSION = '0.1.07';
 
 /**
  * Detection parameters (also the initial slider values).
@@ -72,15 +72,21 @@ export const DEFAULT_PARAMS = Object.freeze({
  * `defaultColor` is the colour it's composited with for display until
  * per-channel colour pickers land (Phase 4). `shortcutKey` is the keyboard key
  * that toggles this channel's visibility (Phase 11; ui/shortcuts.js).
+ *
+ * PER-CHANNEL DETECTION DEFAULTS. `params` seeds this channel's OWN R/Dmin/T
+ * (the per-channel detection sliders; keys must match the `perChannel` SLIDERS).
+ * Every channel is tuned independently — there is no "link channels" mode — so
+ * give each the starting values that suit its stain. Anything omitted here falls
+ * back to DEFAULT_PARAMS. (Threshold mode and fluorescent stay global.)
  */
 export const CHANNELS = Object.freeze([
-  { key: 'r', label: 'EdU channel', short: 'EdU', component: 0, defaultColor: '#ff0000', coloc: true, shortcutKey: 'r' },
-  { key: 'g', label: 'GFP channel', short: 'GFP', component: 1, defaultColor: '#00ff00', coloc: true, shortcutKey: 'g' },
-  { key: 'b', label: 'DAPI channel', short: 'DAPI', component: 2, defaultColor: '#0000ff', coloc: true, shortcutKey: 'b' },
+  { key: 'r', label: 'EdU channel', short: 'EdU', component: 0, defaultColor: '#ff0000', coloc: true, shortcutKey: 'r', params: { R: 5, Dmin: 9, T: 0.5 } },
+  { key: 'g', label: 'GFP channel', short: 'GFP', component: 1, defaultColor: '#00ff00', coloc: true, shortcutKey: 'g', params: { R: 6, Dmin: 10, T: 1.2 } },
+  { key: 'b', label: 'DAPI channel', short: 'DAPI', component: 2, defaultColor: '#0000ff', coloc: true, shortcutKey: 'b', params: { R: 7, Dmin: 2, T: 0.4 } },
   // The luma channel is a reference/brightfield layer — detected + counted, but excluded from
   // co-localization combinations (set coloc:true if you want it to participate).
   // Its visibility shortcut is Y (its slot is the 4th; R/G/B are taken).
-  { key: 'gray', label: 'CC1/PDGFR channel', short: 'CC1', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y' },
+  { key: 'gray', label: 'CC1/PDGFR channel', short: 'CC1', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y', params: { R: 6, Dmin: 9, T: 0.4 } },
 ]);
 
 /**
@@ -183,12 +189,12 @@ const T_RANGE = thresholdRange(DEFAULT_PARAMS.thresholdMode);
  * a change triggers: 'detect' re-runs the worker; 'coloc' only re-runs the
  * (cheap) co-localization pass on the existing per-channel results.
  *
- * `perChannel: true` marks a slider that can be tuned independently per channel
- * (Phase 9). When the channels are LINKED (the default), one shared value drives
- * every channel; UNLINKED, each channel gets its own copy of these sliders. Flip
- * the flag to opt a parameter in/out of per-channel tuning — controls.js, the
- * worker, and main.js all derive their behaviour from it. Non-per-channel
- * sliders (e.g. Co-R) are always global.
+ * `perChannel: true` marks a slider that is tuned independently per channel
+ * (Phase 9). Each channel always gets its own copy of these sliders, seeded from
+ * that channel's CHANNELS[*].params; there is no shared/linked mode. Flip the
+ * flag to opt a parameter in/out of per-channel tuning — controls.js, the worker,
+ * and main.js all derive their behaviour from it. Non-per-channel sliders
+ * (e.g. Co-R) are always global.
  */
 export const SLIDERS = Object.freeze([
   { key: 'R', label: 'Cell radius (R)', min: 1, max: 60, step: 1, unit: 'px', recompute: 'detect', perChannel: true },
@@ -200,11 +206,13 @@ export const SLIDERS = Object.freeze([
 ]);
 
 /**
- * Whether per-channel detection sliders start LINKED (one shared value for every
- * channel). The link toggle in the control panel flips this at runtime; this is
- * just the initial state. See controls.js.
+ * Whether each channel's per-channel detection sliders (R/Dmin/T) start LOCKED.
+ * A lock button in the top-right of every channel group flips this at runtime;
+ * this is just the initial state. Locking disables that group's sliders so the
+ * carefully-set defaults can't be nudged by accident — a purely UI guard, it
+ * never changes the values themselves. See controls.js.
  */
-export const LINK_DEFAULT = true;
+export const LOCK_DEFAULT = true;
 
 /** Dropdown definitions — also generated into the control panel. */
 export const SELECTS = Object.freeze([
