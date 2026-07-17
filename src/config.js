@@ -15,7 +15,7 @@
  * where there is no service worker at all (opened over file://). Keeping it in step
  * with the worker is cosmetic, not functional.
  */
-export const APP_VERSION = '0.1.07';
+export const APP_VERSION = '0.1.08';
 
 /**
  * Detection parameters (also the initial slider values).
@@ -86,20 +86,35 @@ export const CHANNELS = Object.freeze([
   // The luma channel is a reference/brightfield layer — detected + counted, but excluded from
   // co-localization combinations (set coloc:true if you want it to participate).
   // Its visibility shortcut is Y (its slot is the 4th; R/G/B are taken).
-  { key: 'gray', label: 'CC1/PDGFR channel', short: 'CC1', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y', params: { R: 6, Dmin: 9, T: 0.4 } },
+  { key: 'gray', label: 'CC1 channel', short: 'CC1', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y', params: { R: 6, Dmin: 9, T: 0.4 } },
 ]);
 
 /**
  * Display names for a channel key. Internal keys stay r/g/b/gray (they index the
- * RGBA component and the worker payload); `short` is what the UI and the results
- * table show — e.g. 'gray' → 'CC1'.
+ * RGBA component and the worker payload); the display name is what the UI and the
+ * results table show — e.g. 'gray' → 'CC1'.
+ *
+ * MUTABLE at runtime: the per-channel "edit" button (ui/controls.js) renames a
+ * channel via setChannelName(). Everything that shows a channel name reads it
+ * through channelName()/comboName() live, so a rename flows straight to the count
+ * chips and the "View results" table with no other wiring. Seeded from each
+ * channel's `short`.
  */
-const CHANNEL_SHORT = Object.freeze(
-  Object.fromEntries(CHANNELS.map((c) => [c.key, c.short]))
-);
+const channelDisplayNames = Object.fromEntries(CHANNELS.map((c) => [c.key, c.short]));
 
 /** Short display name for a channel key ('gray' → 'CC1'). */
-export const channelName = (key) => CHANNEL_SHORT[key] || String(key).toUpperCase();
+export const channelName = (key) => channelDisplayNames[key] || String(key).toUpperCase();
+
+/**
+ * Rename a channel at runtime (the per-channel edit button). A blank/whitespace
+ * name is ignored so a channel can never lose its label. Returns the name now in
+ * effect for that key.
+ */
+export function setChannelName(key, name) {
+  const trimmed = String(name == null ? '' : name).trim();
+  if (trimmed) channelDisplayNames[key] = trimmed;
+  return channelName(key);
+}
 
 /** Display name for a co-localization combo key ('r+gray' → 'EdU+CC1'). */
 export const comboName = (combo) => String(combo).split('+').map(channelName).join('+');
@@ -247,7 +262,7 @@ export const ACCEPTED_TYPES = Object.freeze({
 export const MARKER_STYLE = Object.freeze({
   color: '#00e5ff',
   /** Fixed per-channel dot radius in image px (not tied to R). */
-  dotRadius: 1.5,
+  dotRadius: 0.75,
   lineWidth: 1.5,
   showLabels: true,
   labelColor: '#ffffff',
@@ -284,6 +299,21 @@ export const MARKER_LABELS = Object.freeze({
   /** Labels start visible. */
   default: true,
   shortcutKey: 'h',
+});
+
+/**
+ * Per-channel MARKER visibility toggle — a DISPLAY-only switch (sibling of the
+ * "Hide numbers" toggle above) for the per-channel detection markers themselves
+ * (the dots OR rings, whichever the marker-style toggle currently shows). Hiding
+ * them clears the detection markers + their number labels from the overlay so the
+ * raw composite can be inspected; co-localization dots and hand-placed manual
+ * squares are UNAFFECTED. `shortcutKey` flips it and is shown in the button's name.
+ * See ui/markerToggle.js.
+ */
+export const MARKER_DOTS = Object.freeze({
+  /** Markers start visible. */
+  default: true,
+  shortcutKey: 'd',
 });
 
 /**

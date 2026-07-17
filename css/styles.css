@@ -309,6 +309,48 @@ body {
   background: color-mix(in srgb, var(--slot-color, var(--accent)) 12%, transparent);
 }
 
+/* Edit (rename) + lock buttons sit together on the right of the group header. */
+.per-channel__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* Rename button — mirrors the lock button so the two read as a pair. */
+.edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  cursor: pointer;
+  flex: none;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.edit-btn:hover { color: var(--text); border-color: var(--slot-color, var(--text-dim)); }
+
+/* Inline rename field, shown in place of the heading while editing. */
+.per-channel__rename {
+  width: 100%;
+  font: inherit;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  background: var(--bg, #0b0e14);
+  border: 1px solid var(--slot-color, var(--accent));
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.per-channel__rename:focus { outline: none; }
+.per-channel__heading[data-editing] { flex: 1 1 auto; }
+
 /* Locked group: sliders are disabled and visibly dimmed. */
 .per-channel__group input[type='range']:disabled {
   opacity: 0.4;

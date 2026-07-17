@@ -39,6 +39,9 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
   /** Per-channel visibility widgets, so the keyboard shortcuts can drive them. */
   /** @type {Record<string, { slot: HTMLElement, eye: HTMLInputElement }>} */
   const visUI = {};
+  /** Per-channel slot label nodes + shortcut suffix, so a rename can update them. */
+  /** @type {Record<string, { node: HTMLElement, suffix: string }>} */
+  const labelUI = {};
 
   // ---- Global blend-mode selector (display-only) ----
   const modeWrap = el('div', 'control composite-mode');
@@ -79,9 +82,9 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
     // The channel's visibility shortcut (config `shortcutKey`, e.g. R/G/B/Y) is shown
     // in the slot's name — "Red channel (R)" — so the key is discoverable without a
     // legend. Display only: the config `label` stays clean for exports/results.
-    label.textContent = def.shortcutKey
-      ? `${def.label} (${def.shortcutKey.toUpperCase()})`
-      : def.label;
+    const labelSuffix = def.shortcutKey ? ` (${def.shortcutKey.toUpperCase()})` : '';
+    label.textContent = `${def.label}${labelSuffix}`;
+    if (!isRoi) labelUI[def.key] = { node: label, suffix: labelSuffix };
     const status = el('span', 'channel-slot__status');
     status.textContent = 'drop file or click';
     text.append(label, status);
@@ -182,6 +185,14 @@ export function initChannelInputs(container, { onFile, onClear = () => {}, onCom
     },
     getCompositeSettings() {
       return { styles, mode };
+    },
+    /**
+     * Rename a channel's slot label (the per-channel edit button path). Keeps the
+     * visibility-shortcut suffix — e.g. "EdU channel (R)" → "Proliferation (R)".
+     */
+    setLabel(key, name) {
+      const ui = labelUI[key];
+      if (ui) ui.node.textContent = `${name}${ui.suffix}`;
     },
     /**
      * Flip a channel's visibility (keyboard shortcut path). Updates the state,

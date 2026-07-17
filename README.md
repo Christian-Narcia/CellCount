@@ -102,8 +102,10 @@ src/
 │   ├── manualMarkers.js   ·  click-to-place/remove channel-attributed manual markers
 │   │                          (+ Undo/Redo buttons; snapshots its lists for the stack)
 │   ├── markerStyle.js     ·  display-only dots/rings toggle for per-channel markers
+│   ├── markerToggle.js    ·  display-only show/hide for the per-channel markers (D key)
+│   ├── labelToggle.js     ·  display-only show/hide for the marker number labels (H key)
 │   ├── controls.js        ·  slider/toggle panel (generated from config); a
-│   │                          per-channel R/Dmin/T group each, with a lock button
+│   │                          per-channel R/Dmin/T group each, with a lock + rename button
 │   ├── overlay.js         ·  marker rendering (dots or rings + co-loc discs)
 │   ├── shortcuts.js       ·  keyboard R/G/B/Y → channel visibility; Ctrl+Z / Ctrl+Shift+Z
 │   │                          → undo/redo any marker or ROI edit

@@ -20,7 +20,7 @@
  *                     applied over `params` (see getChannelParams).
  */
 
-import { SLIDERS, SELECTS, TOGGLES, DEFAULT_PARAMS, CHANNELS, LOCK_DEFAULT, thresholdRange } from '../config.js';
+import { SLIDERS, SELECTS, TOGGLES, DEFAULT_PARAMS, CHANNELS, LOCK_DEFAULT, thresholdRange, setChannelName } from '../config.js';
 
 /** Sliders that support independent per-channel values. */
 const PER_CHANNEL_SLIDERS = SLIDERS.filter((s) => s.perChannel);
@@ -29,13 +29,18 @@ const PER_CHANNEL_SLIDERS = SLIDERS.filter((s) => s.perChannel);
  * @param {HTMLElement} container
  * @param {(payload: { params: object, channelParams: object }) => void} onChange
  *        called (debounced) on any change
+ * @param {{ onRename?: (key: string, name: string) => void }} [options]
+ *        onRename fires after a channel's name is edited (the edit button), with the
+ *        new display name in effect — so the caller can refresh anything else that
+ *        shows it (count chips, channel slot, the results table).
  * @returns {{
  *   getParams: () => object,
  *   setParams: (p: object) => void,
  *   getChannelParams: (key: string) => object,
  * }}
  */
-export function initControls(container, onChange) {
+export function initControls(container, onChange, options = {}) {
+  const { onRename = () => {} } = options;
   const params = { ...DEFAULT_PARAMS };
 
   // Per-channel values, seeded from each channel's own CHANNELS[*].params
@@ -73,6 +78,11 @@ export function initControls(container, onChange) {
   const lockState = {};
   /** @type {Record<string, HTMLButtonElement>} */
   const lockButtons = {};
+  /** Group heading nodes + their current display name, so the edit button can rename them. */
+  /** @type {Record<string, HTMLElement>} */
+  const headings = {};
+  /** @type {Record<string, string>} */
+  const displayNames = {};
   if (PER_CHANNEL_SLIDERS.length && CHANNELS.length) {
     const perChannelWrap = el('div', 'per-channel');
     for (const c of CHANNELS) {
@@ -81,11 +91,16 @@ export function initControls(container, onChange) {
       const header = el('div', 'per-channel__header');
       const heading = el('div', 'per-channel__heading');
       heading.textContent = c.label;
+      headings[c.key] = heading;
+      displayNames[c.key] = c.label;
       if (c.defaultColor) {
         group.style.setProperty('--slot-color', c.defaultColor);
         heading.style.setProperty('--slot-color', c.defaultColor);
       }
-      header.append(heading, buildLockButton(c.key));
+      // Edit (rename) + lock buttons, grouped on the right of the header.
+      const actions = el('div', 'per-channel__actions');
+      actions.append(buildEditButton(c.key), buildLockButton(c.key));
+      header.append(heading, actions);
       group.appendChild(header);
 
       chWidgets[c.key] = {};
@@ -133,6 +148,64 @@ export function initControls(container, onChange) {
       const w = chWidgets[key] && chWidgets[key][def.key];
       if (w) w.input.disabled = locked;
     }
+  }
+
+  /**
+   * Build the rename button for a channel group. Clicking it swaps the heading for
+   * an inline text field; committing renames the channel EVERYWHERE it's shown —
+   * the group heading here, plus (via config.setChannelName + onRename) the count
+   * chips, the channel slot, and the "View results" table.
+   */
+  function buildEditButton(key) {
+    const btn = el('button', 'edit-btn');
+    btn.type = 'button';
+    btn.title = 'Rename channel';
+    btn.setAttribute('aria-label', 'Rename channel');
+    btn.innerHTML = EDIT_ICON;
+    btn.addEventListener('click', () => startRename(key));
+    return btn;
+  }
+
+  /** Swap a group heading for an inline input; Enter/blur commits, Escape cancels. */
+  function startRename(key) {
+    const heading = headings[key];
+    if (!heading || heading.dataset.editing) return;
+    heading.dataset.editing = '1';
+
+    const input = el('input', 'per-channel__rename');
+    input.type = 'text';
+    input.value = displayNames[key];
+    input.setAttribute('aria-label', 'Channel name');
+    heading.textContent = '';
+    heading.appendChild(input);
+    input.focus();
+    input.select();
+
+    const initial = displayNames[key];
+    let done = false;
+    const finish = (save) => {
+      if (done) return; // guard against blur firing after Enter/Escape already ran
+      done = true;
+      delete heading.dataset.editing;
+      const next = input.value.trim();
+      // Only propagate a REAL change — merely opening the editor and clicking away
+      // must not relabel the channel (config keeps the trimmed name in step).
+      if (save && next && next !== initial) {
+        displayNames[key] = setChannelName(key, next);
+        heading.textContent = displayNames[key];
+        onRename(key, displayNames[key]);
+      } else {
+        heading.textContent = initial; // unchanged
+      }
+    };
+
+    input.addEventListener('keydown', (e) => {
+      // Don't let this key reach the global shortcuts while typing a name.
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
   }
 
   // ---- Selects (dropdowns) — always shared ----
@@ -229,6 +302,10 @@ const LOCK_ICON =
   '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
 const UNLOCK_ICON =
   '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-1.9"/></svg>';
+
+/** Inline pencil icon for the per-channel rename (edit) button. */
+const EDIT_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 
 /**
  * Build a single labelled range slider. Returns the label + input nodes and the

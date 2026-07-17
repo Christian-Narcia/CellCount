@@ -42,6 +42,7 @@ import { createRoiControls } from './ui/roiControls.js';
 import { createManualMarkers } from './ui/manualMarkers.js';
 import { createMarkerStyle } from './ui/markerStyle.js';
 import { createLabelToggle } from './ui/labelToggle.js';
+import { createMarkerToggle } from './ui/markerToggle.js';
 import { buildComposite } from './ui/composite.js';
 import { createCanvasLayers } from './ui/canvasLayers.js';
 import { drawAoiBoundary } from './ui/aoiBoundary.js';
@@ -60,6 +61,7 @@ const el = {
   roiControls: document.getElementById('roi-controls'),
   manualTools: document.getElementById('manual-tools'),
   markerTools: document.getElementById('marker-tools'),
+  dotTools: document.getElementById('dot-tools'),
   labelTools: document.getElementById('label-tools'),
   placeholder: document.getElementById('stage-placeholder'),
   baseCanvas: document.getElementById('base-canvas'),
@@ -173,6 +175,13 @@ const labelToggle = createLabelToggle(el.labelTools, {
   onChange: () => renderMarkers(),
 });
 
+// Marker-visibility toggle (button + the D key). Sibling of the label toggle, but
+// it drops the per-channel detection markers themselves (dots or rings) rather than
+// just their numbers. Co-loc dots and manual squares are unaffected. Repaint-only.
+const markerToggle = createMarkerToggle(el.dotTools, {
+  onChange: () => renderMarkers(),
+});
+
 /** Loaded inputs. dims is the shared {width,height}; null until first load. */
 const channels = Object.fromEntries(CHANNELS.map((c) => [c.key, null])); // Float32Array per channel
 let roi = null;             // parsed ImageJ ROI ({ polygon, bbox, … }) or null
@@ -195,7 +204,15 @@ let lastDetectSig = null;   // signature of the last dispatched detection (see b
 const COLOC_KEYS = CHANNELS.filter((c) => c.coloc).map((c) => c.key);
 
 // ---- Controls -------------------------------------------------------------
-const controls = initControls(el.controls, onParamsChange);
+const controls = initControls(el.controls, onParamsChange, {
+  // A channel was renamed via its edit button. channelName() already returns the
+  // new name (config store), so the results modal picks it up on next open; refresh
+  // the live count chips and the channel slot label to match right away.
+  onRename: (key, name) => {
+    updateCounts();
+    inputs.setLabel(key, name);
+  },
+});
 
 /**
  * A signature of every channel's RESOLVED detection params (each channel's own
@@ -713,11 +730,13 @@ function renderMarkers() {
   const groups = [];
   // Per-channel cells — dots or rings (user toggle, Phase 11), with user-excluded
   // cells filtered out. Rings draw at the channel's OWN resolved R, so each group
-  // carries its radius.
+  // carries its radius. The marker-visibility toggle (D) suppresses this whole set
+  // (markers + their labels) while leaving co-loc dots and manual squares in place.
   const shape = markerStyle.getStyle();
+  const showMarkers = markerToggle.getShowMarkers();
   for (const c of CHANNELS) {
     const cells = includedFor(c.key);
-    if (!cells.length || !visible(c.key)) continue;
+    if (!cells.length || !visible(c.key) || !showMarkers) continue;
     groups.push({
       cells,
       color: colorOf(c.key),
