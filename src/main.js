@@ -25,6 +25,7 @@ import {
   DEFAULT_PARAMS,
   CHANNELS,
   ROI_INPUT,
+  EXPORT_NAME_CHANNEL,
   APP_VERSION,
   MARKER_STYLE,
   channelName,
@@ -52,7 +53,7 @@ import { drawMarkerGroups } from './ui/overlay.js';
 import { createResultsModal } from './ui/resultsTable.js';
 import { createChannelShortcuts, createEditShortcuts } from './ui/shortcuts.js';
 import { downloadCsv } from './export/csv.js';
-import { downloadPng } from './export/png.js';
+import { downloadPng, pngNameFrom } from './export/png.js';
 import { registerPWA } from './pwa.js';
 
 // ---- DOM references -------------------------------------------------------
@@ -184,6 +185,9 @@ const markerToggle = createMarkerToggle(el.dotTools, {
 
 /** Loaded inputs. dims is the shared {width,height}; null until first load. */
 const channels = Object.fromEntries(CHANNELS.map((c) => [c.key, null])); // Float32Array per channel
+// The NAME of the file loaded into each channel (pixels live in `channels`). Kept
+// only so the PNG export can be named after the DAPI upload — see exportPngName().
+const channelFileNames = Object.fromEntries(CHANNELS.map((c) => [c.key, null]));
 let roi = null;             // parsed ImageJ ROI ({ polygon, bbox, … }) or null
 let maskMatrix = null;      // ROI rasterised to a Uint8Array 0/1 (the AOI mask), or null
 let dims = null;            // { width, height } — set by the first CHANNEL image
@@ -257,6 +261,7 @@ const inputs = initChannelInputs(el.channelInputs, {
       roiControls.hide();
     } else {
       channels[key] = null;
+      channelFileNames[key] = null;
     }
     // Undoing an edit made against a file that's no longer loaded would restore
     // markers/exclusions for an image the user can't see — drop the stack instead.
@@ -295,6 +300,7 @@ async function loadChannel(key, file) {
 
     const { component } = CHANNELS.find((c) => c.key === key);
     channels[key] = extractChannel(image, component);
+    channelFileNames[key] = file.name; // names the PNG export when this is DAPI
     inputs.setStatus(key, `${file.name} · ${image.width}×${image.height}`);
 
     // A ROI loaded before any channel was deferred — rasterise it now that we
@@ -425,7 +431,10 @@ function resetStage() {
   manualMarkers.clear();
   lastResults = {};
   lastColoc = {};
-  for (const c of CHANNELS) excludedCells[c.key].clear();
+  for (const c of CHANNELS) {
+    excludedCells[c.key].clear();
+    channelFileNames[c.key] = null;
+  }
   history.clear(); // a new stage: every edit the stack refers to is gone
   lastDetectSig = null;
   layers.clearOverlay();
@@ -892,11 +901,23 @@ el.exportBtn.addEventListener('click', () => {
   });
 });
 
-// Flatten the visible canvas stack (composite → AOI boundary → markers) to a PNG.
+// Flatten the visible canvas stack (composite → AOI boundary → markers) to a PNG,
+// named after the DAPI upload (exportPngName) so it files next to its source image.
 el.exportPngBtn.addEventListener('click', () => {
   if (!dims) return;
-  downloadPng([layers.baseCanvas, layers.aoiCanvas, layers.overlayCanvas]);
+  downloadPng([layers.baseCanvas, layers.aoiCanvas, layers.overlayCanvas], exportPngName());
 });
+
+/**
+ * File name for the exported PNG: the DAPI channel's uploaded file name with a
+ * .png extension (config EXPORT_NAME_CHANNEL — DAPI is the nuclear stain every
+ * count is keyed to). Falls back to the generic default when DAPI isn't loaded, so
+ * exporting an EdU/GFP-only view still works.
+ */
+function exportPngName() {
+  const source = EXPORT_NAME_CHANNEL ? channelFileNames[EXPORT_NAME_CHANNEL] : null;
+  return pngNameFrom(source);
+}
 
 /** AOI area in pixels: the mask's inside-count, or the whole image when no ROI. */
 function aoiPixelArea() {

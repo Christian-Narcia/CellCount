@@ -15,7 +15,7 @@
  * where there is no service worker at all (opened over file://). Keeping it in step
  * with the worker is cosmetic, not functional.
  */
-export const APP_VERSION = '0.1.08';
+export const APP_VERSION = '0.1.09';
 
 /**
  * Detection parameters (also the initial slider values).
@@ -78,16 +78,27 @@ export const DEFAULT_PARAMS = Object.freeze({
  * Every channel is tuned independently — there is no "link channels" mode — so
  * give each the starting values that suit its stain. Anything omitted here falls
  * back to DEFAULT_PARAMS. (Threshold mode and fluorescent stay global.)
+ *
+ * `exportName: true` marks the ONE channel whose uploaded file name is reused for
+ * the exported PNG (DAPI — the nuclear stain, so the export sits next to the image
+ * the count is keyed to). See EXPORT_NAME_CHANNEL / export/png.js.
  */
 export const CHANNELS = Object.freeze([
   { key: 'r', label: 'EdU channel', short: 'EdU', component: 0, defaultColor: '#ff0000', coloc: true, shortcutKey: 'r', params: { R: 5, Dmin: 9, T: 0.5 } },
   { key: 'g', label: 'GFP channel', short: 'GFP', component: 1, defaultColor: '#00ff00', coloc: true, shortcutKey: 'g', params: { R: 6, Dmin: 10, T: 1.2 } },
-  { key: 'b', label: 'DAPI channel', short: 'DAPI', component: 2, defaultColor: '#0000ff', coloc: true, shortcutKey: 'b', params: { R: 7, Dmin: 2, T: 0.4 } },
+  { key: 'b', label: 'DAPI channel', short: 'DAPI', component: 2, defaultColor: '#0000ff', coloc: true, shortcutKey: 'b', exportName: true, params: { R: 7, Dmin: 2, T: 0.4 } },
   // The luma channel is a reference/brightfield layer — detected + counted, but excluded from
   // co-localization combinations (set coloc:true if you want it to participate).
   // Its visibility shortcut is Y (its slot is the 4th; R/G/B are taken).
   { key: 'gray', label: 'CC1 channel', short: 'CC1', component: 'luma', defaultColor: '#ffffff', coloc: true, shortcutKey: 'y', params: { R: 6, Dmin: 9, T: 0.4 } },
 ]);
+
+/**
+ * The channel whose uploaded file name names the exported PNG (the `exportName`
+ * flag above — DAPI). null if no channel is flagged, in which case the export falls
+ * back to its default name. Only one channel should carry the flag; the first wins.
+ */
+export const EXPORT_NAME_CHANNEL = (CHANNELS.find((c) => c.exportName) || {}).key || null;
 
 /**
  * Display names for a channel key. Internal keys stay r/g/b/gray (they index the

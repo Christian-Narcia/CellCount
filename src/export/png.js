@@ -28,6 +28,29 @@ export function flattenLayers(canvases) {
 }
 
 /**
+ * Derive the export file name from a SOURCE image file name — the DAPI channel's
+ * upload (config EXPORT_NAME_CHANNEL), so the exported view lands beside the image
+ * it was counted from ("slide7_DAPI.tif" → "slide7_DAPI.png").
+ *
+ * The extension is replaced rather than appended (a ".tif" download named ".png"
+ * confuses both the OS and the user), and path separators are stripped — some
+ * browsers report a relative path for a folder-dropped file, and a "/" in a
+ * download name is silently rejected.
+ *
+ * @param {string|null|undefined} sourceName - e.g. the loaded DAPI file's name
+ * @param {string} [fallback] - used when no source file name is available
+ * @returns {string} a .png file name
+ */
+export function pngNameFrom(sourceName, fallback = 'cell-counts.png') {
+  const base = String(sourceName == null ? '' : sourceName)
+    .split(/[\\/]/)
+    .pop()
+    .replace(/\.[^.]+$/, '') // drop the extension (.tif/.tiff/.png/.jpg…)
+    .trim();
+  return base ? `${base}.png` : fallback;
+}
+
+/**
  * Flatten the stack and trigger a browser download of the result as a PNG.
  * @param {HTMLCanvasElement[]} canvases - stacking order (base → aoi → overlay)
  * @param {string} [filename]
